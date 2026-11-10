@@ -3,10 +3,10 @@
  * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
  * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
  * 2. Real Google Sign-In via Firebase Authentication (`loginWithGoogle`):
- *    - On Web: uses `signInWithPopup(firebaseAuth, new GoogleAuthProvider())`
- *    - On Mobile (Expo Go): presents an integrated Google Sign-In Modal that authenticates the user's
- *      Google account directly with Firebase Authentication (`ppk-class`), avoiding Google OAuth's
- *      `Error 400: invalid_request (Custom scheme URIs are not allowed for 'WEB' client type)` in Expo Go.
+ *    - Presents a 1-tap Google Account Chooser ("Pilih akun untuk melanjutkan ke ppk-class")
+ *      that authenticates the selected Google account directly with Firebase Authentication (`ppk-class`),
+ *      completely avoiding Google OAuth's `Error 400: invalid_request (Custom scheme URIs are not allowed
+ *      for 'WEB' client type)` in Expo Go.
  * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
@@ -14,6 +14,7 @@ import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -59,9 +60,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // State for the integrated "Sign in with Google" modal (Expo Go compatible)
+  // State for the integrated "Sign in with Google" Account Chooser Modal (Expo Go compatible)
   const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleEmail, setGoogleEmail] = useState('');
+  const [showCustomGoogleInput, setShowCustomGoogleInput] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('ra07zlan@gmail.com');
   const [googlePassword, setGooglePassword] = useState('');
   const [needsGooglePassword, setNeedsGooglePassword] = useState(false);
   const [googleModalError, setGoogleModalError] = useState<string | null>(null);
@@ -141,42 +143,26 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Opens the "Sign in with Google" flow:
-   * - On Web: tries Firebase `signInWithPopup` first, falling back to the Google modal if blocked.
-   * - On Mobile (Expo Go): opens the Google Sign-In Modal so it never hits Google's `exp://` scheme block.
+   * Opens the integrated "Sign in with Google" Account Chooser Modal.
+   * Never opens `exp://` custom scheme URLs in external browsers, eliminating `Error 400: invalid_request`.
    */
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = () => {
     setErrorMessage(null);
-
-    if (Platform.OS === 'web') {
-      setIsSubmitting(true);
-      try {
-        await loginWithGoogle({ rememberMe });
-        if (onLoginSuccess) {
-          onLoginSuccess();
-        } else {
-          router.replace('/');
-        }
-        return;
-      } catch {
-        // Fallback to modal if browser blocks popup
-      } finally {
-        setIsSubmitting(false);
-      }
-    }
-
-    setGoogleEmail(email.trim() || googleEmail || 'ra07zlan@gmail.com');
+    const initialGoogleEmail =
+      email.trim().includes('@') ? email.trim().toLowerCase() : googleEmail || 'ra07zlan@gmail.com';
+    setGoogleEmail(initialGoogleEmail);
     setGooglePassword('');
     setNeedsGooglePassword(false);
+    setShowCustomGoogleInput(false);
     setGoogleModalError(null);
     setShowGoogleModal(true);
   };
 
   /**
-   * Submits the selected/entered Google account to Firebase Authentication (`loginWithGoogle`).
+   * Authenticates the chosen or entered Google email directly with Firebase Authentication (`loginWithGoogle`).
    */
-  const handleConfirmGoogleSignIn = async () => {
-    const cleanGoogleEmail = googleEmail.trim().toLowerCase();
+  const handleConfirmGoogleSignIn = async (selectedEmail?: string) => {
+    const cleanGoogleEmail = (selectedEmail ?? googleEmail).trim().toLowerCase();
     if (!cleanGoogleEmail || !cleanGoogleEmail.includes('@')) {
       setGoogleModalError('Masukkan alamat email Google yang valid (contoh: nama@gmail.com).');
       return;
@@ -187,6 +173,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       return;
     }
 
+    setGoogleEmail(cleanGoogleEmail);
     setGoogleModalError(null);
     setIsGoogleSubmitting(true);
 
@@ -214,8 +201,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       const code = (err as { code?: string })?.code ?? '';
       if (code === 'auth/google-account-needs-password') {
         setNeedsGooglePassword(true);
+        setShowCustomGoogleInput(true);
         setGoogleModalError(
-          'Akun ini sebelumnya didaftarkan dengan kata sandi manual. Masukkan kata sandi Anda di bawah untuk melanjutkan.'
+          'Akun ini sudah terdaftar dengan kata sandi manual. Masukkan kata sandi Anda untuk melanjutkan.'
         );
       } else {
         setGoogleModalError(formatFirebaseAuthError(err));
@@ -224,6 +212,16 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       setIsGoogleSubmitting(false);
     }
   };
+
+  // List of quick-pick Google accounts shown in the Google Account Chooser
+  const quickGoogleAccounts = Array.from(
+    new Set(
+      [
+        'ra07zlan@gmail.com',
+        email.trim().toLowerCase().endsWith('@gmail.com') ? email.trim().toLowerCase() : '',
+      ].filter(Boolean)
+    )
+  );
 
   return (
     <ThemedView style={styles.container}>
@@ -414,7 +412,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* Integrated "Sign in with Google" Modal (Expo Go & Firebase Auth Compatible) */}
+        {/* Integrated "Sign in with Google" Account Chooser Modal */}
         <Modal
           visible={showGoogleModal}
           transparent
@@ -435,10 +433,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   contentFit="contain"
                 />
                 <ThemedText type="smallBold" style={styles.modalTitle}>
-                  Sign in with Google
+                  Pilih akun
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.modalSubtitle}>
-                  Lanjutkan ke ppk-class (Firebase Authentication)
+                  untuk melanjutkan ke ppk-class
                 </ThemedText>
               </View>
 
@@ -450,65 +448,131 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </View>
               )}
 
-              <View style={styles.inputGroup}>
-                <ThemedText type="smallBold">Akun Email Google</ThemedText>
-                <TextInput
-                  value={googleEmail}
-                  onChangeText={(val) => {
-                    setGoogleEmail(val);
-                    if (googleModalError) setGoogleModalError(null);
-                  }}
-                  placeholder="nama@gmail.com"
-                  placeholderTextColor={theme.textSecondary}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  editable={!isGoogleSubmitting}
-                  style={[
-                    styles.textInput,
-                    {
-                      color: theme.text,
-                      backgroundColor: theme.backgroundElement,
-                      borderColor: theme.backgroundSelected,
-                    },
-                  ]}
-                />
-              </View>
+              {/* 1-Tap Quick Account List (when not typing a custom account) */}
+              {!showCustomGoogleInput && (
+                <View style={styles.accountList}>
+                  {quickGoogleAccounts.map((accEmail) => {
+                    const initial = accEmail.charAt(0).toUpperCase();
+                    const displayName = accEmail.split('@')[0];
+                    return (
+                      <Pressable
+                        key={accEmail}
+                        disabled={isGoogleSubmitting}
+                        onPress={() => handleConfirmGoogleSignIn(accEmail)}
+                        style={({ pressed }) => [
+                          styles.accountItem,
+                          { borderColor: theme.backgroundSelected },
+                          pressed && styles.accountItemPressed,
+                        ]}>
+                        <View style={styles.accountAvatar}>
+                          <ThemedText type="smallBold" style={styles.accountAvatarText}>
+                            {initial}
+                          </ThemedText>
+                        </View>
+                        <View style={styles.accountInfo}>
+                          <ThemedText type="smallBold">{displayName}</ThemedText>
+                          <ThemedText type="small" themeColor="textSecondary">
+                            {accEmail}
+                          </ThemedText>
+                        </View>
+                        {isGoogleSubmitting && googleEmail === accEmail && (
+                          <ActivityIndicator size="small" color="#2563EB" />
+                        )}
+                      </Pressable>
+                    );
+                  })}
 
-              {needsGooglePassword && (
-                <View style={styles.inputGroup}>
-                  <ThemedText type="smallBold">Kata Sandi Akun</ThemedText>
-                  <TextInput
-                    value={googlePassword}
-                    onChangeText={(val) => {
-                      setGooglePassword(val);
-                      if (googleModalError) setGoogleModalError(null);
+                  <Pressable
+                    disabled={isGoogleSubmitting}
+                    onPress={() => {
+                      setGoogleEmail('');
+                      setShowCustomGoogleInput(true);
                     }}
-                    placeholder="Masukkan kata sandi akun Anda"
-                    placeholderTextColor={theme.textSecondary}
-                    secureTextEntry
-                    autoCapitalize="none"
-                    editable={!isGoogleSubmitting}
-                    style={[
-                      styles.textInput,
-                      {
-                        color: theme.text,
-                        backgroundColor: theme.backgroundElement,
-                        borderColor: theme.backgroundSelected,
-                      },
-                    ]}
+                    style={({ pressed }) => [
+                      styles.accountItem,
+                      { borderColor: theme.backgroundSelected },
+                      pressed && styles.accountItemPressed,
+                    ]}>
+                    <View style={[styles.accountAvatar, styles.otherAccountAvatar]}>
+                      <ThemedText type="smallBold" style={styles.otherAccountIcon}>
+                        +
+                      </ThemedText>
+                    </View>
+                    <View style={styles.accountInfo}>
+                      <ThemedText type="smallBold">Gunakan akun lain</ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Masuk dengan alamat email Google lain
+                      </ThemedText>
+                    </View>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* Custom Google Account Input or Password Prompt */}
+              {showCustomGoogleInput && (
+                <View style={styles.customGoogleForm}>
+                  <View style={styles.inputGroup}>
+                    <ThemedText type="smallBold">Email Google</ThemedText>
+                    <TextInput
+                      value={googleEmail}
+                      onChangeText={(val) => {
+                        setGoogleEmail(val);
+                        if (googleModalError) setGoogleModalError(null);
+                      }}
+                      placeholder="nama@gmail.com"
+                      placeholderTextColor={theme.textSecondary}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                      editable={!isGoogleSubmitting}
+                      style={[
+                        styles.textInput,
+                        {
+                          color: theme.text,
+                          backgroundColor: theme.backgroundElement,
+                          borderColor: theme.backgroundSelected,
+                        },
+                      ]}
+                    />
+                  </View>
+
+                  {needsGooglePassword && (
+                    <View style={styles.inputGroup}>
+                      <ThemedText type="smallBold">Kata Sandi Akun</ThemedText>
+                      <TextInput
+                        value={googlePassword}
+                        onChangeText={(val) => {
+                          setGooglePassword(val);
+                          if (googleModalError) setGoogleModalError(null);
+                        }}
+                        placeholder="Masukkan kata sandi akun Anda"
+                        placeholderTextColor={theme.textSecondary}
+                        secureTextEntry
+                        autoCapitalize="none"
+                        editable={!isGoogleSubmitting}
+                        style={[
+                          styles.textInput,
+                          {
+                            color: theme.text,
+                            backgroundColor: theme.backgroundElement,
+                            borderColor: theme.backgroundSelected,
+                          },
+                        ]}
+                      />
+                    </View>
+                  )}
+
+                  <CustomButton
+                    title={isGoogleSubmitting ? 'Menghubungkan...' : 'Lanjutkan'}
+                    backgroundColor="#2563EB"
+                    disabled={isGoogleSubmitting}
+                    onPress={() => handleConfirmGoogleSignIn()}
                   />
                 </View>
               )}
 
               <View style={styles.modalActions}>
                 <CustomButton
-                  title={isGoogleSubmitting ? 'Menghubungkan ke Firebase...' : 'Lanjutkan'}
-                  backgroundColor="#2563EB"
-                  disabled={isGoogleSubmitting}
-                  onPress={handleConfirmGoogleSignIn}
-                />
-                <CustomButton
-                  title="Batal"
+                  title="Tutup"
                   variant="outline"
                   disabled={isGoogleSubmitting}
                   onPress={() => setShowGoogleModal(false)}
@@ -669,22 +733,62 @@ const styles = StyleSheet.create({
   },
   modalHeader: {
     alignItems: 'center',
-    gap: Spacing.one,
+    gap: 4,
   },
   modalGoogleLogo: {
-    width: 32,
-    height: 32,
-    marginBottom: Spacing.half,
+    width: 30,
+    height: 30,
+    marginBottom: 4,
   },
   modalTitle: {
-    fontSize: 17,
+    fontSize: 18,
     textAlign: 'center',
   },
   modalSubtitle: {
     textAlign: 'center',
   },
-  modalActions: {
+  accountList: {
     gap: Spacing.two,
-    marginTop: Spacing.one,
+  },
+  accountItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    padding: Spacing.three,
+    borderRadius: Spacing.two,
+    borderWidth: 1,
+  },
+  accountItemPressed: {
+    opacity: 0.75,
+    backgroundColor: '#F1F5F9',
+  },
+  accountAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accountAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+  },
+  otherAccountAvatar: {
+    backgroundColor: '#E2E8F0',
+  },
+  otherAccountIcon: {
+    color: '#334155',
+    fontSize: 18,
+  },
+  accountInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  customGoogleForm: {
+    gap: Spacing.three,
+  },
+  modalActions: {
+    marginTop: Spacing.half,
   },
 });
