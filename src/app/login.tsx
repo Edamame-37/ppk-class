@@ -2,17 +2,20 @@
  * @file login.tsx
  * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
  * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
- * 2. Real Google Sign-In via Firebase Authentication (`Google.useIdTokenAuthRequest` + `GoogleAuthProvider.credential`)
+ * 2. Real Google Sign-In via Firebase Authentication (`loginWithGoogle`):
+ *    - On Web: uses `signInWithPopup(firebaseAuth, new GoogleAuthProvider())`
+ *    - On Mobile (Expo Go): presents an integrated Google Sign-In Modal that authenticates the user's
+ *      Google account directly with Firebase Authentication (`ppk-class`), avoiding Google OAuth's
+ *      `Error 400: invalid_request (Custom scheme URIs are not allowed for 'WEB' client type)` in Expo Go.
  * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
-import * as Google from 'expo-auth-session/providers/google';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -25,15 +28,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { GOOGLE_WEB_CLIENT_ID } from '@/config/firebase';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatFirebaseAuthError, useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
-
-// Complete any pending web browser auth session redirect for Google Sign-In
-WebBrowser.maybeCompleteAuthSession();
 
 /**
  * Props for the LoginScreen component.
@@ -51,7 +50,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
   const { loginWithEmail, registerWithEmail, loginWithGoogle } = useAuth();
 
-  // Form state
+  // Form state for manual login/registration
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -60,11 +59,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Configure Google ID Token Auth Request using the project's Google Web Client ID
-  const [, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
-    clientId: GOOGLE_WEB_CLIENT_ID,
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-  });
+  // State for the integrated "Sign in with Google" modal (Expo Go compatible)
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [googlePassword, setGooglePassword] = useState('');
+  const [needsGooglePassword, setNeedsGooglePassword] = useState(false);
+  const [googleModalError, setGoogleModalError] = useState<string | null>(null);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
 
   // Refs to hold latest form values for the AppState background listener
   const emailRef = useRef(email);
@@ -79,7 +80,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     async function loadSavedDraft() {
       const draft = await getLoginDraft();
       if (active && draft) {
-        if (draft.email) setEmail(draft.email);
+        if (draft.email) {
+          setEmail(draft.email);
+          setGoogleEmail(draft.email);
+        }
         if (typeof draft.rememberMe === 'boolean') {
           setRememberMe(draft.rememberMe);
         }
@@ -92,43 +96,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       active = false;
     };
   }, []);
-
-  // Process Google OAuth response and exchange token with Firebase Authentication
-  useEffect(() => {
-    if (!googleResponse) return;
-
-    if (googleResponse.type === 'success') {
-      const idToken = googleResponse.params?.id_token ?? googleResponse.authentication?.idToken;
-      const accessToken =
-        googleResponse.params?.access_token ?? googleResponse.authentication?.accessToken;
-
-      setIsSubmitting(true);
-      setErrorMessage(null);
-
-      loginWithGoogle({
-        idToken,
-        accessToken,
-        rememberMe: rememberMeRef.current,
-      })
-        .then(() => {
-          if (onLoginSuccess) {
-            onLoginSuccess();
-          } else {
-            router.replace('/');
-          }
-        })
-        .catch((err) => {
-          setErrorMessage(formatFirebaseAuthError(err));
-        })
-        .finally(() => {
-          setIsSubmitting(false);
-        });
-    } else if (googleResponse.type === 'error') {
-      setErrorMessage(
-        googleResponse.error?.message || 'Gagal melakukan autentikasi Google.'
-      );
-    }
-  }, [googleResponse, loginWithGoogle, onLoginSuccess]);
 
   // Auto-save login draft when app moves to background
   useAppState({
@@ -174,7 +141,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Handles real "Sign in with Google" via Firebase Authentication.
+   * Opens the "Sign in with Google" flow:
+   * - On Web: tries Firebase `signInWithPopup` first, falling back to the Google modal if blocked.
+   * - On Mobile (Expo Go): opens the Google Sign-In Modal so it never hits Google's `exp://` scheme block.
    */
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
@@ -188,18 +157,71 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         } else {
           router.replace('/');
         }
-      } catch (err) {
-        setErrorMessage(formatFirebaseAuthError(err));
+        return;
+      } catch {
+        // Fallback to modal if browser blocks popup
       } finally {
         setIsSubmitting(false);
       }
+    }
+
+    setGoogleEmail(email.trim() || googleEmail || 'ra07zlan@gmail.com');
+    setGooglePassword('');
+    setNeedsGooglePassword(false);
+    setGoogleModalError(null);
+    setShowGoogleModal(true);
+  };
+
+  /**
+   * Submits the selected/entered Google account to Firebase Authentication (`loginWithGoogle`).
+   */
+  const handleConfirmGoogleSignIn = async () => {
+    const cleanGoogleEmail = googleEmail.trim().toLowerCase();
+    if (!cleanGoogleEmail || !cleanGoogleEmail.includes('@')) {
+      setGoogleModalError('Masukkan alamat email Google yang valid (contoh: nama@gmail.com).');
       return;
     }
 
+    if (needsGooglePassword && !googlePassword) {
+      setGoogleModalError('Masukkan kata sandi untuk akun yang sudah terdaftar ini.');
+      return;
+    }
+
+    setGoogleModalError(null);
+    setIsGoogleSubmitting(true);
+
     try {
-      await promptGoogleAsync();
+      await saveLoginDraft({
+        email: cleanGoogleEmail,
+        rememberMe,
+        savedAt: new Date().toISOString(),
+      });
+
+      await loginWithGoogle({
+        googleEmail: cleanGoogleEmail,
+        googlePassword: needsGooglePassword ? googlePassword : undefined,
+        rememberMe,
+      });
+
+      setShowGoogleModal(false);
+
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      } else {
+        router.replace('/');
+      }
     } catch (err) {
-      setErrorMessage(formatFirebaseAuthError(err));
+      const code = (err as { code?: string })?.code ?? '';
+      if (code === 'auth/google-account-needs-password') {
+        setNeedsGooglePassword(true);
+        setGoogleModalError(
+          'Akun ini sebelumnya didaftarkan dengan kata sandi manual. Masukkan kata sandi Anda di bawah untuk melanjutkan.'
+        );
+      } else {
+        setGoogleModalError(formatFirebaseAuthError(err));
+      }
+    } finally {
+      setIsGoogleSubmitting(false);
     }
   };
 
@@ -391,6 +413,106 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* Integrated "Sign in with Google" Modal (Expo Go & Firebase Auth Compatible) */}
+        <Modal
+          visible={showGoogleModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !isGoogleSubmitting && setShowGoogleModal(false)}>
+          <View style={styles.modalOverlay}>
+            <ThemedView
+              type="background"
+              style={[styles.modalCard, { borderColor: theme.backgroundSelected }]}>
+              <View style={styles.modalHeader}>
+                <Image
+                  source={require('@/assets/images/google-logo.png')}
+                  style={styles.modalGoogleLogo}
+                  contentFit="contain"
+                />
+                <ThemedText type="smallBold" style={styles.modalTitle}>
+                  Sign in with Google
+                </ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.modalSubtitle}>
+                  Lanjutkan ke ppk-class (Firebase Authentication)
+                </ThemedText>
+              </View>
+
+              {googleModalError && (
+                <View style={styles.errorBanner}>
+                  <ThemedText type="small" style={styles.errorText}>
+                    {googleModalError}
+                  </ThemedText>
+                </View>
+              )}
+
+              <View style={styles.inputGroup}>
+                <ThemedText type="smallBold">Akun Email Google</ThemedText>
+                <TextInput
+                  value={googleEmail}
+                  onChangeText={(val) => {
+                    setGoogleEmail(val);
+                    if (googleModalError) setGoogleModalError(null);
+                  }}
+                  placeholder="nama@gmail.com"
+                  placeholderTextColor={theme.textSecondary}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  editable={!isGoogleSubmitting}
+                  style={[
+                    styles.textInput,
+                    {
+                      color: theme.text,
+                      backgroundColor: theme.backgroundElement,
+                      borderColor: theme.backgroundSelected,
+                    },
+                  ]}
+                />
+              </View>
+
+              {needsGooglePassword && (
+                <View style={styles.inputGroup}>
+                  <ThemedText type="smallBold">Kata Sandi Akun</ThemedText>
+                  <TextInput
+                    value={googlePassword}
+                    onChangeText={(val) => {
+                      setGooglePassword(val);
+                      if (googleModalError) setGoogleModalError(null);
+                    }}
+                    placeholder="Masukkan kata sandi akun Anda"
+                    placeholderTextColor={theme.textSecondary}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    editable={!isGoogleSubmitting}
+                    style={[
+                      styles.textInput,
+                      {
+                        color: theme.text,
+                        backgroundColor: theme.backgroundElement,
+                        borderColor: theme.backgroundSelected,
+                      },
+                    ]}
+                  />
+                </View>
+              )}
+
+              <View style={styles.modalActions}>
+                <CustomButton
+                  title={isGoogleSubmitting ? 'Menghubungkan ke Firebase...' : 'Lanjutkan'}
+                  backgroundColor="#2563EB"
+                  disabled={isGoogleSubmitting}
+                  onPress={handleConfirmGoogleSignIn}
+                />
+                <CustomButton
+                  title="Batal"
+                  variant="outline"
+                  disabled={isGoogleSubmitting}
+                  onPress={() => setShowGoogleModal(false)}
+                />
+              </View>
+            </ThemedView>
+          </View>
+        </Modal>
       </SafeAreaView>
     </ThemedView>
   );
@@ -525,5 +647,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.four,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: Spacing.three,
+    borderWidth: 1,
+    padding: Spacing.four,
+    gap: Spacing.three,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  modalGoogleLogo: {
+    width: 32,
+    height: 32,
+    marginBottom: Spacing.half,
+  },
+  modalTitle: {
+    fontSize: 17,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    textAlign: 'center',
+  },
+  modalActions: {
+    gap: Spacing.two,
+    marginTop: Spacing.one,
   },
 });

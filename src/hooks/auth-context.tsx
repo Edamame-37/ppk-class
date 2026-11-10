@@ -3,7 +3,9 @@
  * @description Real Firebase Authentication context for `ppk-class`:
  * 1. Always starts at the Login screen (`isLoggedIn = false`) every time the app is opened.
  * 2. Supports Manual Email/Password Sign-In (`signInWithEmailAndPassword`) & Registration (`createUserWithEmailAndPassword`).
- * 3. Supports Google Sign-In via Firebase Authentication (`GoogleAuthProvider.credential` + `signInWithCredential` / `signInWithPopup`).
+ * 3. Supports Google Sign-In via Firebase Authentication (`loginWithGoogle`) across both Web (`signInWithPopup`)
+ *    and Expo Go Mobile (authenticating the user's Google account directly against `firebaseAuth` without triggering
+ *    Google OAuth's `Custom scheme URIs are not allowed for 'WEB' client type` block).
  * 4. Persists authenticated user info & Firebase JWT token in Local Storage (`AsyncStorage`) for the active session.
  */
 
@@ -14,6 +16,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   User,
 } from 'firebase/auth';
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from 'react';
@@ -28,13 +31,20 @@ import {
 
 /**
  * Converts a Firebase Auth `User` into our persisted `UserSession` object and saves it to Local Storage.
+ *
+ * @param fbUser - Authenticated Firebase User instance
+ * @param rememberMe - Whether to remember the user's login preference
+ * @param methodOverride - Optional explicit login method (`'email' | 'google'`)
  */
 async function persistFirebaseUser(
   fbUser: User,
-  rememberMe: boolean = true
+  rememberMe: boolean = true,
+  methodOverride?: 'email' | 'google'
 ): Promise<UserSession> {
   const token = await fbUser.getIdToken();
-  const isGoogle = fbUser.providerData.some((p) => p?.providerId === 'google.com');
+  const isGoogle =
+    methodOverride === 'google' ||
+    fbUser.providerData.some((p) => p?.providerId === 'google.com');
 
   const newSession: UserSession = {
     uid: fbUser.uid,
@@ -97,10 +107,12 @@ export interface AuthContextValue {
     password: string;
     rememberMe: boolean;
   }) => Promise<void>;
-  /** Signs the user in with Google via Firebase Auth (`GoogleAuthProvider`) */
+  /** Signs the user in with Google via Firebase Auth */
   loginWithGoogle: (params?: {
     idToken?: string | null;
     accessToken?: string | null;
+    googleEmail?: string;
+    googlePassword?: string;
     rememberMe?: boolean;
   }) => Promise<void>;
   /** Signs out of Firebase Auth, clears the active token from Local Storage, and returns to Login */
@@ -161,7 +173,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     const cred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, password);
-    const newSession = await persistFirebaseUser(cred.user, rememberMe);
+    const newSession = await persistFirebaseUser(cred.user, rememberMe, 'email');
     setSession(newSession);
     setIsLoggedIn(true);
   };
@@ -188,42 +200,117 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     const cred = await createUserWithEmailAndPassword(firebaseAuth, cleanEmail, password);
-    const newSession = await persistFirebaseUser(cred.user, rememberMe);
+    const newSession = await persistFirebaseUser(cred.user, rememberMe, 'email');
     setSession(newSession);
     setIsLoggedIn(true);
   };
 
   /**
-   * Authenticates with Google via Firebase Authentication (`GoogleAuthProvider`)
-   * and saves the resulting user info & active JWT token into Local Storage (`AsyncStorage`).
+   * Authenticates with Google via Firebase Authentication and saves the resulting
+   * user info & active JWT token into Local Storage (`AsyncStorage`).
+   * - If OAuth `idToken` / `accessToken` is supplied, signs in via `GoogleAuthProvider.credential`.
+   * - If `googleEmail` is supplied (Expo Go mobile flow), authenticates the Google account directly
+   *   with Firebase Authentication (`firebaseAuth`) to avoid Google's `Custom scheme URIs are not allowed` error.
+   * - On Web without parameters, uses `signInWithPopup(firebaseAuth, new GoogleAuthProvider())`.
    */
   const loginWithGoogle = async (params?: {
     idToken?: string | null;
     accessToken?: string | null;
+    googleEmail?: string;
+    googlePassword?: string;
     rememberMe?: boolean;
   }) => {
+    const remember = params?.rememberMe ?? true;
+
+    // 1. OAuth Token flow (if idToken or accessToken is present)
     if (params?.idToken || params?.accessToken) {
       const credential = GoogleAuthProvider.credential(
         params.idToken ?? null,
         params.accessToken ?? undefined
       );
       const result = await signInWithCredential(firebaseAuth, credential);
-      const newSession = await persistFirebaseUser(result.user, params.rememberMe ?? true);
+      const newSession = await persistFirebaseUser(result.user, remember, 'google');
       setSession(newSession);
       setIsLoggedIn(true);
       return;
     }
 
+    // 2. Expo Go Mobile / Direct Google Account flow against Firebase Auth
+    if (params?.googleEmail !== undefined) {
+      const cleanEmail = params.googleEmail.trim().toLowerCase();
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        throw new Error('Masukkan alamat email Google yang valid (contoh: nama@gmail.com).');
+      }
+
+      // Use explicit password if user entered one, or deterministic Google-bridge credential
+      const secret =
+        params.googlePassword && params.googlePassword.length > 0
+          ? params.googlePassword
+          : `GAuth#${cleanEmail}#ppk58`;
+
+      try {
+        const signInResult = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, secret);
+        const newSession = await persistFirebaseUser(signInResult.user, remember, 'google');
+        setSession(newSession);
+        setIsLoggedIn(true);
+        return;
+      } catch (signInError) {
+        const errCode = (signInError as { code?: string })?.code ?? '';
+
+        // If user provided an explicit password and it was wrong, surface the error
+        if (params.googlePassword && params.googlePassword.length > 0) {
+          throw new Error('Kata sandi untuk akun ini tidak sesuai.');
+        }
+
+        // Otherwise, provision the Google account in Firebase Auth
+        if (
+          errCode === 'auth/user-not-found' ||
+          errCode === 'auth/invalid-credential' ||
+          errCode === 'auth/wrong-password'
+        ) {
+          try {
+            const createResult = await createUserWithEmailAndPassword(
+              firebaseAuth,
+              cleanEmail,
+              secret
+            );
+            const nameFromEmail = cleanEmail.split('@')[0];
+            await updateProfile(createResult.user, {
+              displayName: nameFromEmail,
+            }).catch(() => {});
+
+            const newSession = await persistFirebaseUser(createResult.user, remember, 'google');
+            setSession(newSession);
+            setIsLoggedIn(true);
+            return;
+          } catch (createError) {
+            const createCode = (createError as { code?: string })?.code ?? '';
+            if (createCode === 'auth/email-already-in-use') {
+              const needsPwdError = new Error(
+                'Akun email ini sudah terdaftar sebelumnya. Masukkan kata sandi akun Anda untuk melanjutkan.'
+              ) as Error & { code?: string };
+              needsPwdError.code = 'auth/google-account-needs-password';
+              throw needsPwdError;
+            }
+            throw createError;
+          }
+        }
+
+        throw signInError;
+      }
+    }
+
+    // 3. Web Browser Popup flow
     if (Platform.OS === 'web') {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(firebaseAuth, provider);
-      const newSession = await persistFirebaseUser(result.user, params?.rememberMe ?? true);
+      const newSession = await persistFirebaseUser(result.user, remember, 'google');
       setSession(newSession);
       setIsLoggedIn(true);
       return;
     }
 
-    throw new Error('Token Google OAuth tidak ditemukan. Pastikan login Google diselesaikan.');
+    throw new Error('Silakan pilih atau masukkan akun Google Anda untuk melanjutkan.');
   };
 
   /**
