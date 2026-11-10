@@ -1,126 +1,87 @@
 /**
  * @file app-tabs.web.tsx
- * @description Web navigation bar component displaying only the Dashboard tab in the Light theme.
+ * @description Compact bottom footer navigation component for Web.
+ * Completely hides the footer when the user is on the Login page (`!isLoggedIn`) and renders
+ * a compact, smaller-dimension footer containing only the Dashboard item when on the Dashboard.
  */
-import {
-  TabList,
-  TabListProps,
-  Tabs,
-  TabSlot,
-  TabTrigger,
-  TabTriggerSlotProps,
-} from 'expo-router/ui';
-import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
+import { Slot } from 'expo-router';
+import { StyleSheet, View } from 'react-native';
 
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-
-import { ExternalLink } from './external-link';
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
+import { ThemedText } from '@/components/themed-text';
+import { Colors, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/auth-context';
 
 /**
- * Main web tabs layout rendering only the Dashboard navigation trigger.
+ * Main web layout rendering `<Slot />` and a compact Dashboard footer only after login.
  */
 export default function AppTabs() {
-  return (
-    <Tabs>
-      <TabSlot style={{ height: '100%' }} />
-      <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="dashboard" href="/" asChild>
-            <TabButton>Dashboard</TabButton>
-          </TabTrigger>
-        </CustomTabList>
-      </TabList>
-    </Tabs>
-  );
-}
-
-/**
- * Custom tab button component for web navigation.
- * Destructures `ref` out of TabTriggerSlotProps to ensure type compatibility
- * with React Native's Pressable component in Expo SDK 58 / React Native 0.88.
- */
-export function TabButton({ children, isFocused, ref: _ref, ...props }: TabTriggerSlotProps) {
-  return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
-    </Pressable>
-  );
-}
-
-/**
- * Custom tab bar container for web navigation using the Light theme.
- */
-export function CustomTabList(props: TabListProps) {
+  const { isLoggedIn } = useAuth();
   const colors = Colors.light;
 
   return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          PPK Class
-        </ThemedText>
+    <View style={styles.root}>
+      <View style={styles.content}>
+        <Slot />
+      </View>
 
-        {props.children}
-
-        <ExternalLink href="https://docs.expo.dev" asChild>
-          <Pressable style={styles.externalPressable}>
-            <ThemedText type="link">Docs</ThemedText>
-            <SymbolView
-              tintColor={colors.text}
-              name={{ ios: 'arrow.up.right.square', web: 'link' }}
-              size={12}
+      {/* Hide footer completely on the Login page; render compact footer only on Dashboard */}
+      {isLoggedIn && (
+        <View
+          style={[
+            styles.footerBar,
+            {
+              backgroundColor: colors.background,
+              borderTopColor: colors.backgroundSelected,
+            },
+          ]}>
+          <View style={[styles.tabPill, { backgroundColor: colors.backgroundElement }]}>
+            <Image
+              source={require('@/assets/images/tabIcons/home.png')}
+              style={styles.tabIcon}
+              contentFit="contain"
+              tintColor="#2563EB"
             />
-          </Pressable>
-        </ExternalLink>
-      </ThemedView>
+            <ThemedText type="smallBold" style={styles.tabLabel}>
+              Dashboard
+            </ThemedText>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tabListContainer: {
-    position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
+  root: {
+    flex: 1,
   },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
-    maxWidth: MaxContentWidth,
+  content: {
+    flex: 1,
   },
-  brandText: {
-    marginRight: 'auto',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  tabButtonView: {
+  footerBar: {
+    borderTopWidth: 1,
     paddingVertical: Spacing.one,
     paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-  },
-  externalPressable: {
-    flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
-    gap: Spacing.one,
-    marginLeft: Spacing.three,
+    justifyContent: 'center',
+  },
+  tabPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 16,
+  },
+  tabIcon: {
+    width: 15,
+    height: 15,
+  },
+  tabLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#2563EB',
   },
 });

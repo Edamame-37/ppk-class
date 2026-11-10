@@ -1,12 +1,10 @@
 /**
  * @file index.tsx
  * @description Main entry route (`/`) for the PPK Class application.
- * Presents the Login screen first when the user opens the application, and transitions
- * to the Student Dashboard screen (displaying 5 hardcoded students with Nama, NIM, and Program Studi)
- * once the user signs in.
+ * Presents the Login screen first (without any bottom footer) when the user opens the application,
+ * and transitions to the Student Dashboard screen (with the compact Dashboard footer) once signed in.
  */
 
-import { useState } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,7 +13,8 @@ import { StudentCard } from '@/components/student-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { STUDENTS_DATA, Student } from '@/constants/students';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/auth-context';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -24,14 +23,12 @@ import { useTheme } from '@/hooks/use-theme';
  */
 export default function DashboardScreen() {
   const theme = useTheme();
-
-  // Start with isLoggedIn = false so the user is immediately presented with the Login page on app launch
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { isLoggedIn, setIsLoggedIn } = useAuth();
 
   // Compute unique Program Studi count from the hardcoded dataset
   const totalProdi = new Set(STUDENTS_DATA.map((item) => item.programStudi)).size;
 
-  // Render the Login page first before entering the Dashboard
+  // Render the Login page first before entering the Dashboard (footer is hidden while !isLoggedIn)
   if (!isLoggedIn) {
     return <LoginScreen onLoginSuccess={() => setIsLoggedIn(true)} />;
   }
@@ -95,7 +92,7 @@ export default function DashboardScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
         <FlatList
           data={STUDENTS_DATA}
           keyExtractor={(item) => item.id}
@@ -123,7 +120,7 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.four,
+    paddingBottom: Spacing.four,
   },
   headerContainer: {
     gap: Spacing.three,
