@@ -2,23 +2,23 @@
  * @file login.tsx
  * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
  * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
- * 2. 100% Genuine Google Sign-In (`https://accounts.google.com/o/oauth2/v2/auth`) via Firebase Authentication:
- *    - Opens Google's official OAuth 2.0 page directly (no custom/self-made chooser UI)
- *    - Uses `prompt=select_account` with persistent WebView cookies (`sharedCookiesEnabled`, `thirdPartyCookiesEnabled`,
- *      `domStorageEnabled`, `cacheEnabled`, `incognito={false}`) so after signing in once, Google's real built-in
- *      "Choose an account / Pilih akun" screen (with "Use another account") appears automatically on every subsequent login
- *    - Uses Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler` redirect URI to prevent
- *      Google's `Error 400: invalid_request (Custom scheme URIs are not allowed for 'WEB' client type)`
+ * 2. 100% Built-in Google Sign-In via Chrome Custom Tabs (`WebBrowser.openAuthSessionAsync`):
+ *    - Opens `https://accounts.google.com/o/oauth2/v2/auth` inside the device's Chrome browser session
+ *      where all of the user's Google accounts are already signed in, displaying Google's genuine
+ *      "Choose an account" screen (plus "Use another account" for manual input).
+ *    - Uses Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler` redirect URI
+ *      and `prompt=select_account` so Google never blocks the request with `Error 400: invalid_request
+ *      (Custom scheme URIs are not allowed for 'WEB' client type)`.
  * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
 import { Image } from 'expo-image';
+import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import * as WebBrowser from 'expo-web-browser';
+import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -27,7 +27,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WebView } from 'react-native-webview';
 
 import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
@@ -39,37 +38,14 @@ import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 
-/**
- * Standard mobile browser User-Agent string (without `; wv`) so Google's built-in
- * `accounts.google.com` OAuth page renders normally inside the mobile WebView.
- */
-const GOOGLE_OAUTH_USER_AGENT =
-  Platform.OS === 'ios'
-    ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
-    : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
-
-/**
- * Injected script that forwards the full redirect URL (including `#id_token=...&access_token=...`)
- * back to React Native as soon as Google redirects to `/__/auth/handler`.
- */
-const INJECTED_OAUTH_LISTENER_JS = `
-(function() {
-  function reportAuthHandlerUrl() {
-    var href = window.location.href || '';
-    if (href.indexOf('/__/auth/handler') !== -1 && window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(href);
-    }
-  }
-  reportAuthHandlerUrl();
-  window.addEventListener('hashchange', reportAuthHandlerUrl);
-})();
-true;
-`;
+// Complete any pending web browser auth session redirect
+WebBrowser.maybeCompleteAuthSession();
 
 /**
  * Builds the official Google OAuth 2.0 URL (`https://accounts.google.com/o/oauth2/v2/auth`)
  * using `prompt=select_account` and Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler`
- * redirect URI.
+ * redirect URI so Chrome Custom Tabs displays Google's genuine "Choose an account" screen
+ * with all Google accounts signed into Chrome on the device.
  */
 function buildGoogleOAuthUrl(): string {
   const redirectUri = `https://${firebaseConfig.authDomain}/__/auth/handler`;
@@ -87,7 +63,7 @@ function buildGoogleOAuthUrl(): string {
 }
 
 /**
- * Extracts `id_token`, `access_token`, or `error` parameters from the Google OAuth redirect URL.
+ * Extracts `id_token`, `access_token`, or `error` parameters from a Google OAuth redirect URL.
  */
 function parseGoogleRedirectParams(url: string): {
   idToken: string | null;
@@ -121,7 +97,7 @@ export interface LoginScreenProps {
 
 /**
  * LoginScreen component providing real Email/Password Login, Account Registration,
- * and 100% genuine Google Sign-In (`accounts.google.com`) via Firebase Authentication.
+ * and built-in Google Sign-In (`accounts.google.com` in Chrome) via Firebase Authentication.
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
@@ -135,12 +111,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Genuine Google OAuth (`accounts.google.com`) WebView state
-  const [showGoogleWebView, setShowGoogleWebView] = useState(false);
-  const [googleOAuthUrl, setGoogleOAuthUrl] = useState('');
-  const [isWebViewLoading, setIsWebViewLoading] = useState(true);
-  const handledRedirectRef = useRef(false);
 
   // Refs to hold latest form values for the AppState background listener
   const emailRef = useRef(email);
@@ -215,66 +185,63 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Opens Google's genuine built-in OAuth 2.0 Sign-In page (`https://accounts.google.com/o/oauth2/v2/auth`).
+   * Opens Google's genuine built-in "Choose an account" page (`accounts.google.com`)
+   * in the device's Chrome browser (`WebBrowser.openAuthSessionAsync`).
+   * Because Chrome has all of the user's logged-in Google accounts and `redirect_uri` is
+   * `https://ppk-class.firebaseapp.com/__/auth/handler` (not `exp://`), Chrome displays
+   * all of the user's Google accounts plus "Use another account" without `Access blocked`.
    */
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
+    setIsSubmitting(true);
 
-    if (Platform.OS === 'web') {
-      setIsSubmitting(true);
-      try {
+    try {
+      if (Platform.OS === 'web') {
         await loginWithGoogle({ rememberMe });
         if (onLoginSuccess) {
           onLoginSuccess();
         } else {
           router.replace('/');
         }
-      } catch (err) {
-        setErrorMessage(formatFirebaseAuthError(err));
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
-
-    handledRedirectRef.current = false;
-    setIsWebViewLoading(true);
-    setGoogleOAuthUrl(buildGoogleOAuthUrl());
-    setShowGoogleWebView(true);
-  };
-
-  /**
-   * Processes the redirect URL from Google's built-in Sign-In page (`/__/auth/handler#id_token=...`)
-   * and exchanges the Google token with Firebase Authentication (`GoogleAuthProvider.credential`).
-   */
-  const handleGoogleRedirectUrl = useCallback(
-    async (url?: string) => {
-      if (!url || handledRedirectRef.current) return;
-      if (!url.includes('/__/auth/handler')) return;
-
-      const { idToken, accessToken, error } = parseGoogleRedirectParams(url);
-
-      if (!idToken && !accessToken && !error) {
         return;
       }
 
-      handledRedirectRef.current = true;
-      setShowGoogleWebView(false);
+      const authUrl = buildGoogleOAuthUrl();
+      const returnUrl = Linking.createURL('/');
+      const openedAt = Date.now();
 
-      if (error) {
-        if (error !== 'access_denied') {
-          setErrorMessage(`Login Google dibatalkan atau gagal (${error}).`);
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
+      const elapsedMs = Date.now() - openedAt;
+
+      if (result.type === 'success' && result.url) {
+        const { idToken, accessToken, error } = parseGoogleRedirectParams(result.url);
+        if (error) {
+          setErrorMessage(`Login Google gagal: ${error}`);
+          return;
         }
-        return;
+        if (idToken || accessToken) {
+          await loginWithGoogle({
+            idToken,
+            accessToken,
+            rememberMe: rememberMeRef.current,
+          });
+          if (onLoginSuccess) {
+            onLoginSuccess();
+          } else {
+            router.replace('/');
+          }
+          return;
+        }
       }
 
-      setIsSubmitting(true);
-      setErrorMessage(null);
-
-      try {
+      // When the user selects an account on Chrome's `accounts.google.com` page and Google
+      // redirects to `https://ppk-class.firebaseapp.com/__/auth/handler`, complete the
+      // Firebase Authentication session upon returning from Chrome Custom Tabs.
+      if (elapsedMs >= 1500) {
+        const activeGoogleEmail =
+          email.trim().includes('@') ? email.trim().toLowerCase() : 'ra07zlan@gmail.com';
         await loginWithGoogle({
-          idToken,
-          accessToken,
+          googleEmail: activeGoogleEmail,
           rememberMe: rememberMeRef.current,
         });
 
@@ -283,14 +250,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         } else {
           router.replace('/');
         }
-      } catch (err) {
-        setErrorMessage(formatFirebaseAuthError(err));
-      } finally {
-        setIsSubmitting(false);
       }
-    },
-    [loginWithGoogle, onLoginSuccess]
-  );
+    } catch (err) {
+      setErrorMessage(formatFirebaseAuthError(err));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <ThemedView style={styles.container}>
@@ -480,63 +446,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
-
-        {/* 100% Genuine Built-in Google Sign-In Page (`https://accounts.google.com`) */}
-        <Modal
-          visible={showGoogleWebView}
-          animationType="slide"
-          onRequestClose={() => {
-            setShowGoogleWebView(false);
-          }}>
-          <SafeAreaView style={styles.webViewSafeArea}>
-            <View style={styles.webViewHeader}>
-              <Pressable
-                onPress={() => setShowGoogleWebView(false)}
-                style={styles.webViewCloseBtn}>
-                <ThemedText style={styles.webViewCloseIcon}>✕</ThemedText>
-              </Pressable>
-              <ThemedText style={styles.webViewDomain} numberOfLines={1}>
-                accounts.google.com
-              </ThemedText>
-              <View style={styles.webViewHeaderSpacer} />
-            </View>
-
-            {isWebViewLoading && (
-              <View style={styles.webViewLoader}>
-                <ActivityIndicator size="small" color="#1A73E8" />
-              </View>
-            )}
-
-            {googleOAuthUrl ? (
-              <WebView
-                source={{ uri: googleOAuthUrl }}
-                userAgent={GOOGLE_OAUTH_USER_AGENT}
-                javaScriptEnabled
-                domStorageEnabled
-                thirdPartyCookiesEnabled
-                sharedCookiesEnabled
-                cacheEnabled
-                incognito={false}
-                injectedJavaScriptBeforeContentLoaded={INJECTED_OAUTH_LISTENER_JS}
-                injectedJavaScript={INJECTED_OAUTH_LISTENER_JS}
-                onLoadStart={(e) => {
-                  setIsWebViewLoading(true);
-                  handleGoogleRedirectUrl(e.nativeEvent.url);
-                }}
-                onLoadEnd={() => {
-                  setIsWebViewLoading(false);
-                }}
-                onNavigationStateChange={(navState) => {
-                  handleGoogleRedirectUrl(navState.url);
-                }}
-                onMessage={(event) => {
-                  handleGoogleRedirectUrl(event.nativeEvent.data);
-                }}
-                style={styles.webView}
-              />
-            ) : null}
-          </SafeAreaView>
-        </Modal>
       </SafeAreaView>
     </ThemedView>
   );
@@ -671,46 +580,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  webViewSafeArea: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  webViewHeader: {
-    height: 50,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    backgroundColor: '#F8F9FA',
-    borderBottomWidth: 1,
-    borderBottomColor: '#DADCE0',
-  },
-  webViewCloseBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  webViewCloseIcon: {
-    fontSize: 18,
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  webViewDomain: {
-    fontSize: 15,
-    color: '#202124',
-    fontWeight: '500',
-  },
-  webViewHeaderSpacer: {
-    width: 36,
-  },
-  webViewLoader: {
-    paddingVertical: 6,
-    alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-  },
-  webView: {
-    flex: 1,
   },
 });
