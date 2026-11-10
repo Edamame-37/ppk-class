@@ -1,8 +1,16 @@
-import { NativeTabs } from 'expo-router/native-tabs';
+/**
+ * @file app-tabs.tsx
+ * @description Native bottom tab navigator component for Expo SDK 57.
+ * Uses `expo-router/unstable-native-tabs` (the SDK 57 module path for NativeTabs).
+ */
+import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
 
+/**
+ * Primary tab navigation layout for native platforms (Android & iOS).
+ */
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];

@@ -1,13 +1,13 @@
 import {
-  Tabs,
   TabList,
-  TabTrigger,
-  TabSlot,
-  TabTriggerSlotProps,
   TabListProps,
+  Tabs,
+  TabSlot,
+  TabTrigger,
+  TabTriggerSlotProps,
 } from 'expo-router/ui';
 import { SymbolView } from 'expo-symbols';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
+import { Pressable, StyleSheet, useColorScheme, View } from 'react-native';
 
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 
@@ -36,7 +36,7 @@ export default function AppTabs() {
 /**
  * Custom tab button component for web navigation.
  * Destructures `ref` out of TabTriggerSlotProps to ensure type compatibility
- * with React Native's Pressable component in SDK 58 / React Native 0.88.
+ * with React Native's Pressable component in Expo SDK 57 / React Native 0.86.
  */
 export function TabButton({ children, isFocused, ref: _ref, ...props }: TabTriggerSlotProps) {
   return (
