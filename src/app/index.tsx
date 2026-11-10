@@ -41,9 +41,9 @@ export default function DashboardScreen() {
       {/* Top Bar: Dashboard Title & Subtitle */}
       <View style={styles.topBar}>
         <View style={styles.titleGroup}>
-          <ThemedText type="subtitle">Dashboard Mahasiswa</ThemedText>
+          <ThemedText type="subtitle">Dashboard</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            Daftar Mahasiswa Aktif PPK Class
+            Daftar Mahasiswa
           </ThemedText>
         </View>
       </View>
@@ -73,12 +73,9 @@ export default function DashboardScreen() {
         </ThemedView>
       </View>
 
-      {/* Section Title */}
+      {/* Section Title (without "Data Hardcode" text) */}
       <View style={styles.sectionHeader}>
         <ThemedText type="smallBold">Daftar Mahasiswa ({STUDENTS_DATA.length})</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          Data Hardcode
-        </ThemedText>
       </View>
     </View>
   );
