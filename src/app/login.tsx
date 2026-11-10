@@ -419,7 +419,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           visible={showGoogleModal}
           transparent
           animationType="fade"
-          onRequestClose={() => !isGoogleSubmitting && setShowGoogleModal(false)}>
+          onRequestClose={() => {
+            if (!isGoogleSubmitting) {
+              setShowGoogleModal(false);
+            }
+          }}>
           <View style={styles.modalOverlay}>
             <ThemedView
               type="background"
