@@ -83,9 +83,7 @@ export default function DashboardScreen() {
   /**
    * Renders an individual StudentCard item inside the FlatList.
    */
-  const renderStudentItem = ({ item, index }: { item: Student; index: number }) => (
-    <StudentCard student={item} index={index + 1} />
-  );
+  const renderStudentItem = ({ item }: { item: Student }) => <StudentCard student={item} />;
 
   return (
     <ThemedView style={styles.container}>

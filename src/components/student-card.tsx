@@ -1,7 +1,7 @@
 /**
  * @file student-card.tsx
  * @description Reusable card component for displaying a student's Nama, NIM, and Program Studi
- * on the Dashboard screen. Designed with mobile-first responsive layout and light/dark theme support.
+ * on the Dashboard screen without an index number badge.
  */
 
 import { StyleSheet, View } from 'react-native';
@@ -18,15 +18,13 @@ import { useTheme } from '@/hooks/use-theme';
 export interface StudentCardProps {
   /** Student data item to render */
   student: Student;
-  /** 1-based display index of the student in the list */
-  index: number;
 }
 
 /**
- * Extracts up to two uppercase initials from a student's full name for the avatar badge.
+ * Extracts up to two uppercase initials from a student's name for the avatar badge.
  *
- * @param fullName - The student's full name
- * @returns Uppercase initials (e.g. "AF" for "Ahmad Fauzan Pratama")
+ * @param fullName - The student's name
+ * @returns Uppercase initials (e.g. "AS" for "Asep")
  */
 function getInitials(fullName: string): string {
   const parts = fullName.trim().split(/\s+/);
@@ -36,10 +34,10 @@ function getInitials(fullName: string): string {
 }
 
 /**
- * Renders a styled card containing a student's avatar initials, full name (Nama),
+ * Renders a styled card containing a student's avatar initials, name (Nama),
  * student ID (NIM), and study program (Program Studi).
  */
-export function StudentCard({ student, index }: StudentCardProps) {
+export function StudentCard({ student }: StudentCardProps) {
   const theme = useTheme();
   const initials = getInitials(student.nama);
 
@@ -52,14 +50,11 @@ export function StudentCard({ student, index }: StudentCardProps) {
         <ThemedText style={styles.avatarText}>{initials}</ThemedText>
       </View>
 
-      {/* Center section: Nama, NIM, and Program Studi details */}
+      {/* Center section: Nama, NIM, and Program Studi details (without #1, #2 index label) */}
       <View style={styles.infoContainer}>
         <View style={styles.topRow}>
           <ThemedText type="smallBold" style={styles.nameText}>
             {student.nama}
-          </ThemedText>
-          <ThemedText type="code" themeColor="textSecondary" style={styles.indexText}>
-            #{index}
           </ThemedText>
         </View>
 
@@ -112,16 +107,11 @@ const styles = StyleSheet.create({
   },
   topRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: Spacing.two,
   },
   nameText: {
     fontSize: 16,
     flexShrink: 1,
-  },
-  indexText: {
-    fontSize: 12,
   },
   detailRow: {
     flexDirection: 'row',
