@@ -1,16 +1,15 @@
 /**
  * @file auth-context.tsx
- * @description Real Firebase Authentication and Session Caching context for `ppk-class`:
- * 1. Manual Email/Password Sign-In (`signInWithEmailAndPassword`) & Registration (`createUserWithEmailAndPassword`)
- * 2. Google Sign-In via Firebase Authentication (`GoogleAuthProvider.credential` + `signInWithCredential` / `signInWithPopup`)
- * 3. Persists authenticated user info & real Firebase JWT token in Local Storage (`AsyncStorage`)
- * 4. Automatically bypasses the Login page on app launch when an active token is present in Local Storage
+ * @description Real Firebase Authentication context for `ppk-class`:
+ * 1. Always starts at the Login screen (`isLoggedIn = false`) every time the app is opened.
+ * 2. Supports Manual Email/Password Sign-In (`signInWithEmailAndPassword`) & Registration (`createUserWithEmailAndPassword`).
+ * 3. Supports Google Sign-In via Firebase Authentication (`GoogleAuthProvider.credential` + `signInWithCredential` / `signInWithPopup`).
+ * 4. Persists authenticated user info & Firebase JWT token in Local Storage (`AsyncStorage`) for the active session.
  */
 
 import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
-  onAuthStateChanged,
   signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -23,7 +22,6 @@ import { Platform } from 'react-native';
 import { firebaseAuth } from '@/config/firebase';
 import {
   clearUserSession,
-  getUserSession,
   saveUserSession,
   UserSession,
 } from '@/utils/storage';
@@ -81,11 +79,11 @@ export function formatFirebaseAuthError(error: unknown): string {
  * Shape of the authentication context.
  */
 export interface AuthContextValue {
-  /** Whether the user has an active Firebase session token and is viewing the Home/Dashboard */
+  /** Whether the user has completed login during the current app session */
   isLoggedIn: boolean;
   /** Currently active user session metadata stored in Local Storage */
   session: UserSession | null;
-  /** Whether initial token check from Local Storage is still in progress */
+  /** Whether initial startup reset is in progress */
   isHydrating: boolean;
   /** Signs the user in with Email & Password via Firebase Auth (`signInWithEmailAndPassword`) */
   loginWithEmail: (params: {
@@ -114,7 +112,7 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   isLoggedIn: false,
   session: null,
-  isHydrating: true,
+  isHydrating: false,
   loginWithEmail: async () => {},
   registerWithEmail: async () => {},
   loginWithGoogle: async () => {},
@@ -123,55 +121,27 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 /**
- * Provides real Firebase Authentication + Local Storage token caching and automatic Login bypass.
+ * Provides real Firebase Authentication while ensuring every app launch starts on the Login screen.
  */
 export function AuthProvider({ children }: PropsWithChildren) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [session, setSession] = useState<UserSession | null>(null);
-  const [isHydrating, setIsHydrating] = useState(true);
+  const [isHydrating] = useState(false);
 
   /**
    * Mounting lifecycle:
-   * 1. Reads cached session token from Local Storage (`AsyncStorage`). If an active token exists,
-   *    bypasses the Login page immediately (`setIsLoggedIn(true)`).
-   * 2. Subscribes to Firebase `onAuthStateChanged` to keep the token in Local Storage fresh.
+   * Every time the app is opened from scratch, reset any leftover session so the user
+   * is always presented with the Login screen first before entering the Dashboard.
    */
   useEffect(() => {
-    let active = true;
-
-    async function checkActiveTokenOnMount() {
-      const savedSession = await getUserSession();
-      if (active) {
-        if (savedSession && Boolean(savedSession.token) && Boolean(savedSession.uid)) {
-          setSession(savedSession);
-          setIsLoggedIn(true);
-        }
-        setIsHydrating(false);
-      }
-    }
-
-    checkActiveTokenOnMount();
-
-    const unsubscribeFirebaseAuth = onAuthStateChanged(firebaseAuth, async (fbUser) => {
-      if (!active) return;
-      if (fbUser) {
-        const syncedSession = await persistFirebaseUser(fbUser, true);
-        if (active) {
-          setSession(syncedSession);
-          setIsLoggedIn(true);
-        }
-      }
-    });
-
-    return () => {
-      active = false;
-      unsubscribeFirebaseAuth();
-    };
+    setIsLoggedIn(false);
+    setSession(null);
+    clearUserSession();
+    signOut(firebaseAuth).catch(() => {});
   }, []);
 
   /**
    * Authenticates an existing user with Email & Password via Firebase Auth (`signInWithEmailAndPassword`).
-   * Throws an error if credentials are invalid so the Login UI displays the error message.
    */
   const loginWithEmail = async ({
     email,
