@@ -1,3 +1,7 @@
+/**
+ * @file app-tabs.web.tsx
+ * @description Web navigation bar component configuring tabs for Dashboard (`/`) and Login (`/login`).
+ */
 import {
   TabList,
   TabListProps,
@@ -15,17 +19,20 @@ import { ExternalLink } from './external-link';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
+/**
+ * Main web tabs layout rendering the Dashboard and Login navigation triggers.
+ */
 export default function AppTabs() {
   return (
     <Tabs>
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
+          <TabTrigger name="dashboard" href="/" asChild>
+            <TabButton>Dashboard</TabButton>
           </TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild>
-            <TabButton>Explore</TabButton>
+          <TabTrigger name="login" href="/login" asChild>
+            <TabButton>Login</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>

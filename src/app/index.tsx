@@ -1,61 +1,113 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
+/**
+ * @file index.tsx
+ * @description Student Dashboard screen (main route `/`) for the PPK Class application.
+ * Displays a summary header and a list of 5 hardcoded students with their Nama, NIM,
+ * and Program Studi, along with a quick navigation button to the Login page.
+ */
+
+import { Link } from 'expo-router';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
+import { StudentCard } from '@/components/student-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
+import { STUDENTS_DATA, Student } from '@/constants/students';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+/**
+ * DashboardScreen component that renders the hardcoded list of 5 students
+ * (Nama, NIM, Program Studi) and summary metrics.
+ */
+export default function DashboardScreen() {
+  const theme = useTheme();
 
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
+  // Compute unique Program Studi count from the hardcoded dataset
+  const totalProdi = new Set(STUDENTS_DATA.map((item) => item.programStudi)).size;
+
+  /**
+   * Renders the top header section above the student FlatList.
+   */
+  const renderListHeader = () => (
+    <View style={styles.headerContainer}>
+      {/* Top Bar: Title & Login/Logout Navigation Button */}
+      <View style={styles.topBar}>
+        <View style={styles.titleGroup}>
+          <ThemedText type="subtitle">Dashboard Mahasiswa</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Daftar Mahasiswa Aktif PPK Class
+          </ThemedText>
+        </View>
+
+        <Link href="/login" asChild>
+          <Pressable
+            style={({ pressed }) => [
+              styles.loginNavButton,
+              { borderColor: theme.backgroundSelected, backgroundColor: theme.backgroundElement },
+              pressed && styles.pressed,
+            ]}>
+            <ThemedText type="smallBold" style={styles.loginNavText}>
+              Halaman Login
+            </ThemedText>
+          </Pressable>
+        </Link>
+      </View>
+
+      {/* Summary Statistics Row */}
+      <View style={styles.statsRow}>
+        <ThemedView
+          type="backgroundElement"
+          style={[styles.statCard, { borderColor: theme.backgroundSelected }]}>
+          <ThemedText type="subtitle" style={styles.statValue}>
+            {STUDENTS_DATA.length}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Total Mahasiswa
           </ThemedText>
         </ThemedView>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
+        <ThemedView
+          type="backgroundElement"
+          style={[styles.statCard, { borderColor: theme.backgroundSelected }]}>
+          <ThemedText type="subtitle" style={styles.statValue}>
+            {totalProdi}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Program Studi
+          </ThemedText>
         </ThemedView>
+      </View>
 
-        {Platform.OS === 'web' && <WebBadge />}
+      {/* Section Title */}
+      <View style={styles.sectionHeader}>
+        <ThemedText type="smallBold">Daftar Mahasiswa ({STUDENTS_DATA.length})</ThemedText>
+        <ThemedText type="small" themeColor="textSecondary">
+          Data Hardcode
+        </ThemedText>
+      </View>
+    </View>
+  );
+
+  /**
+   * Renders an individual StudentCard item inside the FlatList.
+   */
+  const renderStudentItem = ({ item, index }: { item: Student; index: number }) => (
+    <StudentCard student={item} index={index + 1} />
+  );
+
+  return (
+    <ThemedView style={styles.container}>
+      <SafeAreaView style={styles.safeArea}>
+        <FlatList
+          data={STUDENTS_DATA}
+          keyExtractor={(item) => item.id}
+          renderItem={renderStudentItem}
+          ListHeaderComponent={renderListHeader}
+          contentContainerStyle={styles.listContent}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          showsVerticalScrollIndicator={false}
+        />
       </SafeAreaView>
     </ThemedView>
   );
@@ -64,35 +116,66 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
     flexDirection: 'row',
+    justifyContent: 'center',
   },
   safeArea: {
     flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
     maxWidth: MaxContentWidth,
   },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
+  listContent: {
     paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+    paddingTop: Spacing.three,
+    paddingBottom: BottomTabInset + Spacing.four,
   },
-  title: {
-    textAlign: 'center',
-  },
-  code: {
-    textTransform: 'uppercase',
-  },
-  stepContainer: {
+  headerContainer: {
     gap: Spacing.three,
-    alignSelf: 'stretch',
+    marginBottom: Spacing.three,
+  },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flexWrap: 'wrap',
+  },
+  titleGroup: {
+    gap: Spacing.half,
+    flexShrink: 1,
+  },
+  loginNavButton: {
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+    paddingVertical: Spacing.two,
+    borderRadius: Spacing.two,
+    borderWidth: 1,
+  },
+  loginNavText: {
+    color: '#2563EB',
+  },
+  pressed: {
+    opacity: 0.75,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: Spacing.three,
+  },
+  statCard: {
+    flex: 1,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+    borderWidth: 1,
+    gap: Spacing.half,
+  },
+  statValue: {
+    color: '#2563EB',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: Spacing.one,
+  },
+  separator: {
+    height: Spacing.two,
   },
 });
