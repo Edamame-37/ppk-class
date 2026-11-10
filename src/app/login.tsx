@@ -1,9 +1,9 @@
 /**
  * @file login.tsx
- * @description Login screen for the PPK Class application integrating:
- * 1. Firebase Authentication "Sign in with Google" (`GoogleAuthProvider` + `expo-auth-session/providers/google`)
- * 2. Local Storage (`AsyncStorage`) persistence of user login info & active token
- * 3. Modular `<CustomButton>` components, open/closed eye password toggle, and `AppState` draft auto-save
+ * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
+ * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
+ * 2. Real Google Sign-In via Firebase Authentication (`Google.useIdTokenAuthRequest` + `GoogleAuthProvider.credential`)
+ * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
 import * as Google from 'expo-auth-session/providers/google';
@@ -25,25 +25,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { GOOGLE_WEB_CLIENT_ID } from '@/config/firebase';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { useAuth } from '@/hooks/auth-context';
+import { formatFirebaseAuthError, useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 
 // Complete any pending web browser auth session redirect for Google Sign-In
 WebBrowser.maybeCompleteAuthSession();
-
-/**
- * Check whether Google OAuth Client IDs are configured in environment variables.
- */
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
-const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
-
-const isGoogleOAuthConfigured = Boolean(
-  GOOGLE_WEB_CLIENT_ID && GOOGLE_WEB_CLIENT_ID !== 'your-web-client-id.apps.googleusercontent.com'
-);
 
 /**
  * Props for the LoginScreen component.
@@ -54,26 +44,26 @@ export interface LoginScreenProps {
 }
 
 /**
- * LoginScreen component providing Email/Password and Firebase "Sign in with Google" authentication,
- * saving the login session token into Local Storage (`AsyncStorage`).
+ * LoginScreen component providing real Email/Password Login, Account Registration,
+ * and Firebase "Sign in with Google" authentication.
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
-  const { loginWithEmail, loginWithGoogle } = useAuth();
+  const { loginWithEmail, registerWithEmail, loginWithGoogle } = useAuth();
 
-  // Declarative state for login form fields (Week 9 Slide 3)
+  // Form state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Configure Google ID Token Auth Request for Firebase GoogleAuthProvider
+  // Configure Google ID Token Auth Request using the project's Google Web Client ID
   const [, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
-    webClientId: isGoogleOAuthConfigured
-      ? GOOGLE_WEB_CLIENT_ID
-      : 'placeholder-web-client-id.apps.googleusercontent.com',
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID || 'placeholder-android-client-id.apps.googleusercontent.com',
-    iosClientId: GOOGLE_IOS_CLIENT_ID || 'placeholder-ios-client-id.apps.googleusercontent.com',
+    clientId: GOOGLE_WEB_CLIENT_ID,
+    webClientId: GOOGLE_WEB_CLIENT_ID,
   });
 
   // Refs to hold latest form values for the AppState background listener
@@ -82,7 +72,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const rememberMeRef = useRef(rememberMe);
   rememberMeRef.current = rememberMe;
 
-  // Mounting lifecycle: restore any previously saved email draft from AsyncStorage (Week 9 Slide 13)
+  // Restore any previously saved email draft from AsyncStorage on mount
   useEffect(() => {
     let active = true;
 
@@ -103,23 +93,44 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     };
   }, []);
 
-  // Handle Google OAuth response when `promptGoogleAsync` returns an id_token for Firebase Auth
+  // Process Google OAuth response and exchange token with Firebase Authentication
   useEffect(() => {
-    if (googleResponse?.type === 'success') {
-      const idToken = googleResponse.params?.id_token;
-      loginWithGoogle({ idToken, email: emailRef.current, rememberMe: rememberMeRef.current }).then(
-        () => {
+    if (!googleResponse) return;
+
+    if (googleResponse.type === 'success') {
+      const idToken = googleResponse.params?.id_token ?? googleResponse.authentication?.idToken;
+      const accessToken =
+        googleResponse.params?.access_token ?? googleResponse.authentication?.accessToken;
+
+      setIsSubmitting(true);
+      setErrorMessage(null);
+
+      loginWithGoogle({
+        idToken,
+        accessToken,
+        rememberMe: rememberMeRef.current,
+      })
+        .then(() => {
           if (onLoginSuccess) {
             onLoginSuccess();
           } else {
             router.replace('/');
           }
-        }
+        })
+        .catch((err) => {
+          setErrorMessage(formatFirebaseAuthError(err));
+        })
+        .finally(() => {
+          setIsSubmitting(false);
+        });
+    } else if (googleResponse.type === 'error') {
+      setErrorMessage(
+        googleResponse.error?.message || 'Gagal melakukan autentikasi Google.'
       );
     }
   }, [googleResponse, loginWithGoogle, onLoginSuccess]);
 
-  // AppState lifecycle: auto-save login draft when app moves to background (Week 9 Slide 23)
+  // Auto-save login draft when app moves to background
   useAppState({
     onBackground: () => {
       saveLoginDraft({
@@ -131,42 +142,64 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   });
 
   /**
-   * Handles standard Email/Password login via Firebase Auth and stores token in Local Storage.
+   * Handles real Email/Password Sign-In or Registration against Firebase Authentication.
    */
-  const handleSignIn = async () => {
-    await saveLoginDraft({
-      email,
-      rememberMe,
-      savedAt: new Date().toISOString(),
-    });
-    await loginWithEmail({ email, password, rememberMe });
-    if (onLoginSuccess) {
-      onLoginSuccess();
-    } else {
-      router.replace('/');
+  const handleManualAuth = async () => {
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      await saveLoginDraft({
+        email,
+        rememberMe,
+        savedAt: new Date().toISOString(),
+      });
+
+      if (isRegisterMode) {
+        await registerWithEmail({ email, password, rememberMe });
+      } else {
+        await loginWithEmail({ email, password, rememberMe });
+      }
+
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      } else {
+        router.replace('/');
+      }
+    } catch (err) {
+      setErrorMessage(formatFirebaseAuthError(err));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   /**
-   * Handles "Sign in with Google" via Firebase Authentication (`GoogleAuthProvider`)
-   * and persists the user's login info & active token in Local Storage (`AsyncStorage`).
+   * Handles real "Sign in with Google" via Firebase Authentication.
    */
   const handleGoogleSignIn = async () => {
-    if (isGoogleOAuthConfigured && Platform.OS !== 'web') {
-      const result = await promptGoogleAsync();
-      if (result.type === 'success') {
-        return;
+    setErrorMessage(null);
+
+    if (Platform.OS === 'web') {
+      setIsSubmitting(true);
+      try {
+        await loginWithGoogle({ rememberMe });
+        if (onLoginSuccess) {
+          onLoginSuccess();
+        } else {
+          router.replace('/');
+        }
+      } catch (err) {
+        setErrorMessage(formatFirebaseAuthError(err));
+      } finally {
+        setIsSubmitting(false);
       }
+      return;
     }
 
-    await loginWithGoogle({
-      email: email || 'google.user@students.undip.ac.id',
-      rememberMe,
-    });
-    if (onLoginSuccess) {
-      onLoginSuccess();
-    } else {
-      router.replace('/');
+    try {
+      await promptGoogleAsync();
+    } catch (err) {
+      setErrorMessage(formatFirebaseAuthError(err));
     }
   };
 
@@ -180,27 +213,40 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            {/* Header Section: Only "Selamat Datang Kembali" */}
+            {/* Header Section: "Selamat Datang Kembali" */}
             <View style={styles.headerSection}>
               <ThemedText type="subtitle" style={styles.title}>
                 Selamat Datang Kembali
               </ThemedText>
             </View>
 
-            {/* Login Card Form */}
+            {/* Login / Register Card Form */}
             <ThemedView
               type="backgroundElement"
               style={[styles.formCard, { borderColor: theme.backgroundSelected }]}>
+              {/* Error Alert Banner (if authentication fails) */}
+              {errorMessage && (
+                <View style={styles.errorBanner}>
+                  <ThemedText type="small" style={styles.errorText}>
+                    {errorMessage}
+                  </ThemedText>
+                </View>
+              )}
+
               {/* Email Input Field (Email only, no NIM) */}
               <View style={styles.inputGroup}>
                 <ThemedText type="smallBold">Email</ThemedText>
                 <TextInput
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(val) => {
+                    setEmail(val);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
                   placeholder="Masukkan email Anda"
                   placeholderTextColor={theme.textSecondary}
                   autoCapitalize="none"
                   keyboardType="email-address"
+                  editable={!isSubmitting}
                   style={[
                     styles.textInput,
                     {
@@ -225,11 +271,19 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   ]}>
                   <TextInput
                     value={password}
-                    onChangeText={setPassword}
-                    placeholder="Masukkan kata sandi Anda"
+                    onChangeText={(val) => {
+                      setPassword(val);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    placeholder={
+                      isRegisterMode
+                        ? 'Buat kata sandi (minimal 6 karakter)'
+                        : 'Masukkan kata sandi Anda'
+                    }
                     placeholderTextColor={theme.textSecondary}
                     secureTextEntry={!showPassword}
                     autoCapitalize="none"
+                    editable={!isSubmitting}
                     style={[styles.passwordInput, { color: theme.text }]}
                   />
                   <Pressable
@@ -276,11 +330,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </Pressable>
               </View>
 
-              {/* Reusable CustomButton: Primary Login Button */}
+              {/* Primary Action Button: Masuk or Daftar Akun */}
               <CustomButton
-                title="Masuk"
+                title={
+                  isSubmitting
+                    ? 'Memproses...'
+                    : isRegisterMode
+                      ? 'Daftar & Masuk'
+                      : 'Masuk'
+                }
                 backgroundColor="#2563EB"
-                onPress={handleSignIn}
+                disabled={isSubmitting}
+                onPress={handleManualAuth}
                 style={styles.primaryButtonSpacing}
               />
 
@@ -297,10 +358,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 />
               </View>
 
-              {/* Reusable CustomButton: Firebase Sign in with Google */}
+              {/* Firebase Sign in with Google Button */}
               <CustomButton
                 title="Sign in with Google"
                 variant="outline"
+                disabled={isSubmitting}
                 onPress={handleGoogleSignIn}
                 leftIcon={
                   <Image
@@ -312,14 +374,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               />
             </ThemedView>
 
-            {/* Footer Registration Link */}
+            {/* Footer Link to Toggle between Login and Register Mode */}
             <View style={styles.footerRow}>
               <ThemedText type="small" themeColor="textSecondary">
-                Belum memiliki akun?{' '}
+                {isRegisterMode ? 'Sudah memiliki akun? ' : 'Belum memiliki akun? '}
               </ThemedText>
-              <Pressable>
+              <Pressable
+                onPress={() => {
+                  setIsRegisterMode((prev) => !prev);
+                  setErrorMessage(null);
+                }}>
                 <ThemedText type="smallBold" style={styles.linkText}>
-                  Daftar Sekarang
+                  {isRegisterMode ? 'Masuk di Sini' : 'Daftar Sekarang'}
                 </ThemedText>
               </Pressable>
             </View>
@@ -361,6 +427,17 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.three,
     borderWidth: 1,
     gap: Spacing.three,
+  },
+  errorBanner: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderWidth: 1,
+    borderRadius: Spacing.two,
+    padding: Spacing.two,
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 12,
   },
   inputGroup: {
     gap: Spacing.one,

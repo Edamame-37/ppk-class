@@ -1,12 +1,11 @@
 /**
  * @file index.tsx
  * @description Home / Student Dashboard screen (`/`) for the PPK Class application.
- * Implements the 5 Firebase + React Native requirements:
- * 1. Authenticates with Google on Firebase Auth (`login.tsx` + `auth-context.tsx`)
- * 2. Stores login session & token in Local Storage (`AsyncStorage`)
- * 3. Bypasses the Login page automatically whenever an active token exists in Local Storage
- * 4. Allows inputting new student data (`nama`, `nim`, `programStudi`) into the `students` database table/collection
- * 5. Displays the live list of students stored in the database via `subscribeToStudents`
+ * Fully integrated with Firebase Authentication and Cloud Firestore (`ppk-class`) without any hardcoded data:
+ * 1. Bypasses the Login page automatically when an active Firebase token exists in Local Storage (`AsyncStorage`)
+ * 2. Subscribes in realtime (`onSnapshot`) to the `students` collection in Cloud Firestore
+ * 3. Allows inputting new student documents (`nama`, `nim`, `programStudi`) into Cloud Firestore (`addDoc`)
+ * 4. Allows deleting student documents from Cloud Firestore (`deleteDoc`) on card long-press
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -26,21 +25,21 @@ import { CustomButton } from '@/components/custom-button';
 import { StudentCard } from '@/components/student-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { STUDENTS_DATA, Student } from '@/constants/students';
+import { Student } from '@/constants/students';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import {
   addStudentToDatabase,
-  resetStudentsInDatabase,
+  deleteStudentFromDatabase,
   subscribeToStudents,
 } from '@/services/student-service';
 import { getStudentsData } from '@/utils/storage';
 
 /**
- * DashboardScreen component displaying the list of students from the database
- * and providing a form to input new student records into the `students` table/collection.
+ * DashboardScreen component displaying the live list of students from Cloud Firestore
+ * and providing a form to input new student records into the `students` collection.
  */
 export default function DashboardScreen() {
   const theme = useTheme();
@@ -48,33 +47,53 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
 
-  // Database student list state (populated via `subscribeToStudents` realtime database listener)
-  const [students, setStudents] = useState<Student[]>([...STUDENTS_DATA]);
+  // Student list state populated strictly from Cloud Firestore (no hardcoded data)
+  const [students, setStudents] = useState<Student[]>([]);
+  const [isLoadingDb, setIsLoadingDb] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newNama, setNewNama] = useState('');
   const [newNim, setNewNim] = useState('');
   const [newProdi, setNewProdi] = useState('Informatika');
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
 
-  // Subscribe to the `students` database collection/table on mount and cleanup on unmount (Week 10 Slide 19)
+  // Subscribe to the Cloud Firestore `students` collection when logged in
   useEffect(() => {
-    const unsubscribe = subscribeToStudents((dbStudents) => {
-      setStudents(dbStudents);
-    });
+    if (!isLoggedIn) return;
+
+    setIsLoadingDb(true);
+    setDbError(null);
+
+    const unsubscribe = subscribeToStudents(
+      (firestoreStudents) => {
+        setStudents(firestoreStudents);
+        setIsLoadingDb(false);
+        setDbError(null);
+      },
+      (errMessage) => {
+        setDbError(errMessage);
+        setIsLoadingDb(false);
+      }
+    );
 
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [isLoggedIn]);
 
-  // AppState lifecycle: refresh database cache when app returns from background to active foreground (Week 9 Slide 23)
+  // AppState lifecycle: read cached students if needed when returning to foreground
   const appState = useAppState({
     onForeground: () => {
-      getStudentsData().then((stored) => setStudents(stored));
+      if (students.length === 0) {
+        getStudentsData().then((cached) => {
+          if (cached.length > 0) setStudents(cached);
+        });
+      }
     },
   });
 
-  // Derived state calculated during render using useMemo (Week 9 Slide 17 Decision Guide)
+  // Derived state calculated during render using useMemo
   const totalProdi = useMemo(
     () => new Set(students.map((item) => item.programStudi)).size,
     [students]
@@ -92,38 +111,51 @@ export default function DashboardScreen() {
   }, [students, searchQuery]);
 
   /**
-   * Inserts a new student record (`nama`, `nim`, `programStudi`) into the `students` database collection.
+   * Inserts a new student document (`nama`, `nim`, `programStudi`) into Cloud Firestore (`students`).
    */
   const handleAddStudent = useCallback(async () => {
     const trimmedName = newNama.trim();
-    if (!trimmedName) return;
+    const trimmedNim = newNim.trim();
+    const trimmedProdi = newProdi.trim() || 'Informatika';
 
-    const generatedNim =
-      newNim.trim() ||
-      `240601241${[2, 3, 4][Math.floor(Math.random() * 3)]}0${String(
-        Math.floor(100 + Math.random() * 900)
-      )}`;
+    if (!trimmedName || !trimmedNim) {
+      setDbError('Nama dan NIM mahasiswa wajib diisi.');
+      return;
+    }
 
-    await addStudentToDatabase({
-      nama: trimmedName,
-      nim: generatedNim,
-      programStudi: newProdi.trim() || 'Informatika',
-    });
+    setIsSavingStudent(true);
+    setDbError(null);
 
-    setNewNama('');
-    setNewNim('');
-    setNewProdi('Informatika');
-    setShowAddForm(false);
+    try {
+      await addStudentToDatabase({
+        nama: trimmedName,
+        nim: trimmedNim,
+        programStudi: trimmedProdi,
+      });
+
+      setNewNama('');
+      setNewNim('');
+      setNewProdi('Informatika');
+      setShowAddForm(false);
+    } catch (err) {
+      setDbError((err as Error)?.message || 'Gagal menyimpan data mahasiswa ke Cloud Firestore.');
+    } finally {
+      setIsSavingStudent(false);
+    }
   }, [newNama, newNim, newProdi]);
 
   /**
-   * Resets the `students` database table back to the 5 initial students (Asep, Mamat, Yanto, Udin, Rahmat).
+   * Deletes a student document from Cloud Firestore when long-pressed.
    */
-  const handleResetStudents = useCallback(async () => {
-    await resetStudentsInDatabase();
+  const handleDeleteStudent = useCallback(async (student: Student) => {
+    try {
+      await deleteStudentFromDatabase(student.id);
+    } catch (err) {
+      setDbError((err as Error)?.message || 'Gagal menghapus data mahasiswa.');
+    }
   }, []);
 
-  // While checking Local Storage for an active token on app launch, avoid flashing the Login screen
+  // Wait for Local Storage token check on startup so active tokens bypass the Login screen cleanly
   if (isHydrating) {
     return (
       <ThemedView style={styles.loadingContainer}>
@@ -140,7 +172,9 @@ export default function DashboardScreen() {
   /**
    * Renders an individual StudentCard item inside the FlatList.
    */
-  const renderStudentItem = ({ item }: { item: Student }) => <StudentCard student={item} />;
+  const renderStudentItem = ({ item }: { item: Student }) => (
+    <StudentCard student={item} onLongPress={handleDeleteStudent} />
+  );
 
   return (
     <ThemedView style={styles.container}>
@@ -154,7 +188,7 @@ export default function DashboardScreen() {
           renderItem={renderStudentItem}
           ListHeaderComponent={
             <View style={styles.headerContainer}>
-              {/* Top Bar: Dashboard Title, Active User Info & Logout Button */}
+              {/* Top Bar: Dashboard Title, Logged-in Firebase Email & Logout Button */}
               <View style={styles.topBar}>
                 <View style={styles.titleGroup}>
                   <ThemedText type="subtitle">Dashboard</ThemedText>
@@ -212,7 +246,16 @@ export default function DashboardScreen() {
                 </ThemedView>
               </View>
 
-              {/* Search Input & Button to Input New Student into Database */}
+              {/* Error Banner if Firestore reports an error */}
+              {dbError && (
+                <View style={styles.errorBanner}>
+                  <ThemedText type="small" style={styles.errorText}>
+                    {dbError}
+                  </ThemedText>
+                </View>
+              )}
+
+              {/* Search Input & Button to Input New Student into Cloud Firestore */}
               <View style={styles.controlsRow}>
                 <TextInput
                   value={searchQuery}
@@ -230,23 +273,29 @@ export default function DashboardScreen() {
                 />
                 <CustomButton
                   title={showAddForm ? 'Tutup' : '+ Tambah'}
-                  onPress={() => setShowAddForm((prev) => !prev)}
+                  onPress={() => {
+                    setShowAddForm((prev) => !prev);
+                    setDbError(null);
+                  }}
                   style={styles.addToggleBtn}
                   labelStyle={styles.smallBtnLabel}
                 />
               </View>
 
-              {/* Form Input Data Mahasiswa ke Database (`students` collection) */}
+              {/* Form Input Data Mahasiswa ke Cloud Firestore (`students` collection) */}
               {showAddForm && (
                 <ThemedView
                   type="backgroundElement"
                   style={[styles.addFormCard, { borderColor: theme.backgroundSelected }]}>
-                  <ThemedText type="smallBold">Input Data Mahasiswa ke Database</ThemedText>
+                  <ThemedText type="smallBold">
+                    Input Data Mahasiswa ke Cloud Firestore
+                  </ThemedText>
                   <TextInput
                     value={newNama}
                     onChangeText={setNewNama}
-                    placeholder="Nama Mahasiswa (contoh: Budi)"
+                    placeholder="Nama Mahasiswa"
                     placeholderTextColor={theme.textSecondary}
+                    editable={!isSavingStudent}
                     style={[
                       styles.formInput,
                       {
@@ -259,9 +308,10 @@ export default function DashboardScreen() {
                   <TextInput
                     value={newNim}
                     onChangeText={setNewNim}
-                    placeholder="NIM (kosongkan untuk auto-generate 240601241...)"
+                    placeholder="NIM Mahasiswa (contoh: 24060124120014)"
                     placeholderTextColor={theme.textSecondary}
                     keyboardType="numeric"
+                    editable={!isSavingStudent}
                     style={[
                       styles.formInput,
                       {
@@ -276,6 +326,7 @@ export default function DashboardScreen() {
                     onChangeText={setNewProdi}
                     placeholder="Program Studi (contoh: Informatika)"
                     placeholderTextColor={theme.textSecondary}
+                    editable={!isSavingStudent}
                     style={[
                       styles.formInput,
                       {
@@ -287,20 +338,12 @@ export default function DashboardScreen() {
                   />
                   <View style={styles.formButtonRow}>
                     <CustomButton
-                      title="Simpan ke Database"
+                      title={isSavingStudent ? 'Menyimpan...' : 'Simpan ke Database'}
+                      disabled={isSavingStudent}
                       onPress={handleAddStudent}
                       style={styles.flexButton}
                       labelStyle={styles.smallBtnLabel}
                     />
-                    {students.length !== STUDENTS_DATA.length && (
-                      <CustomButton
-                        title="Reset 5 Data"
-                        variant="outline"
-                        onPress={handleResetStudents}
-                        style={styles.resetBtn}
-                        labelStyle={styles.smallBtnLabel}
-                      />
-                    )}
                   </View>
                 </ThemedView>
               )}
@@ -310,15 +353,28 @@ export default function DashboardScreen() {
                 <ThemedText type="smallBold">
                   Daftar Mahasiswa ({filteredStudents.length})
                 </ThemedText>
-                {students.length !== STUDENTS_DATA.length && (
-                  <Pressable onPress={handleResetStudents}>
-                    <ThemedText type="small" style={styles.resetLink}>
-                      Reset Default
-                    </ThemedText>
-                  </Pressable>
-                )}
               </View>
             </View>
+          }
+          ListEmptyComponent={
+            isLoadingDb ? (
+              <View style={styles.emptyContainer}>
+                <ActivityIndicator size="small" color="#2563EB" />
+                <ThemedText type="small" themeColor="textSecondary">
+                  Memuat data mahasiswa dari Cloud Firestore...
+                </ThemedText>
+              </View>
+            ) : (
+              <ThemedView
+                type="backgroundElement"
+                style={[styles.emptyCard, { borderColor: theme.backgroundSelected }]}>
+                <ThemedText type="smallBold">Belum Ada Data Mahasiswa di Database</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.emptySubtitle}>
+                  Koleksi &quot;students&quot; pada Cloud Firestore Anda masih kosong. Tekan tombol
+                  &quot;+ Tambah&quot; di atas untuk menginput data mahasiswa baru ke database.
+                </ThemedText>
+              </ThemedView>
+            )
           }
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -417,6 +473,17 @@ const styles = StyleSheet.create({
   statValue: {
     color: '#2563EB',
   },
+  errorBanner: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderWidth: 1,
+    borderRadius: Spacing.two,
+    padding: Spacing.two,
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 12,
+  },
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -459,17 +526,26 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 42,
   },
-  resetBtn: {
-    height: 42,
-  },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: Spacing.one,
   },
-  resetLink: {
-    color: '#2563EB',
+  emptyContainer: {
+    paddingVertical: Spacing.five,
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  emptyCard: {
+    padding: Spacing.four,
+    borderRadius: Spacing.three,
+    borderWidth: 1,
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  emptySubtitle: {
+    textAlign: 'center',
   },
   separator: {
     height: Spacing.two,

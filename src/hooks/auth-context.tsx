@@ -1,10 +1,10 @@
 /**
  * @file auth-context.tsx
- * @description Authentication and Session Caching context integrating:
- * 1. Firebase Authentication (`GoogleAuthProvider`, `signInWithCredential`, `signInWithPopup`,
- *    `signInWithEmailAndPassword`, `createUserWithEmailAndPassword`, `signOut`)
- * 2. Local Storage (`AsyncStorage`) persistence of login information (`uid`, `email`, `token`, `loginMethod`)
- * 3. Automatic Login Page Bypass when an active token is found in Local Storage on app open (Week 10 Slide 20)
+ * @description Real Firebase Authentication and Session Caching context for `ppk-class`:
+ * 1. Manual Email/Password Sign-In (`signInWithEmailAndPassword`) & Registration (`createUserWithEmailAndPassword`)
+ * 2. Google Sign-In via Firebase Authentication (`GoogleAuthProvider.credential` + `signInWithCredential` / `signInWithPopup`)
+ * 3. Persists authenticated user info & real Firebase JWT token in Local Storage (`AsyncStorage`)
+ * 4. Automatically bypasses the Login page on app launch when an active token is present in Local Storage
  */
 
 import {
@@ -15,11 +15,12 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  User,
 } from 'firebase/auth';
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { firebaseAuth, isFirebaseConfigured } from '@/config/firebase';
+import { firebaseAuth } from '@/config/firebase';
 import {
   clearUserSession,
   getUserSession,
@@ -28,32 +29,81 @@ import {
 } from '@/utils/storage';
 
 /**
+ * Converts a Firebase Auth `User` into our persisted `UserSession` object and saves it to Local Storage.
+ */
+async function persistFirebaseUser(
+  fbUser: User,
+  rememberMe: boolean = true
+): Promise<UserSession> {
+  const token = await fbUser.getIdToken();
+  const isGoogle = fbUser.providerData.some((p) => p?.providerId === 'google.com');
+
+  const newSession: UserSession = {
+    uid: fbUser.uid,
+    email: fbUser.email ?? '',
+    displayName: fbUser.displayName ?? undefined,
+    token,
+    loginMethod: isGoogle ? 'google' : 'email',
+    rememberMe,
+    loggedInAt: new Date().toISOString(),
+  };
+
+  await saveUserSession(newSession);
+  return newSession;
+}
+
+/**
+ * Translates Firebase Auth error codes into clear Indonesian error messages.
+ */
+export function formatFirebaseAuthError(error: unknown): string {
+  const code = (error as { code?: string })?.code ?? '';
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Format alamat email tidak valid.';
+    case 'auth/user-not-found':
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+      return 'Email atau kata sandi salah (atau akun belum terdaftar). Silakan klik "Daftar Sekarang" jika belum memiliki akun.';
+    case 'auth/email-already-in-use':
+      return 'Email ini sudah terdaftar. Silakan masuk menggunakan kata sandi Anda.';
+    case 'auth/weak-password':
+      return 'Kata sandi terlalu lemah (minimal 6 karakter).';
+    case 'auth/operation-not-allowed':
+      return 'Metode login ini belum diaktifkan di Firebase Console (Authentication -> Sign-in method).';
+    case 'auth/network-request-failed':
+      return 'Gagal terhubung ke server Firebase. Periksa koneksi internet Anda.';
+    default:
+      return (error as Error)?.message || 'Terjadi kesalahan saat autentikasi ke Firebase.';
+  }
+}
+
+/**
  * Shape of the authentication context.
  */
 export interface AuthContextValue {
-  /** Whether the user has an active session token and is viewing the Home/Dashboard */
+  /** Whether the user has an active Firebase session token and is viewing the Home/Dashboard */
   isLoggedIn: boolean;
   /** Currently active user session metadata stored in Local Storage */
   session: UserSession | null;
   /** Whether initial token check from Local Storage is still in progress */
   isHydrating: boolean;
-  /** Signs the user in with Email & Password via Firebase Auth + caches token in Local Storage */
+  /** Signs the user in with Email & Password via Firebase Auth (`signInWithEmailAndPassword`) */
   loginWithEmail: (params: {
     email: string;
-    password?: string;
+    password: string;
     rememberMe: boolean;
   }) => Promise<void>;
-  /** Signs the user in with Google via Firebase Auth (`GoogleAuthProvider`) + caches token in Local Storage */
+  /** Registers a new user account with Email & Password via Firebase Auth (`createUserWithEmailAndPassword`) */
+  registerWithEmail: (params: {
+    email: string;
+    password: string;
+    rememberMe: boolean;
+  }) => Promise<void>;
+  /** Signs the user in with Google via Firebase Auth (`GoogleAuthProvider`) */
   loginWithGoogle: (params?: {
     idToken?: string | null;
-    email?: string;
+    accessToken?: string | null;
     rememberMe?: boolean;
-  }) => Promise<void>;
-  /** Legacy alias for loginWithEmail */
-  login: (params: {
-    email: string;
-    loginMethod: 'email' | 'google';
-    rememberMe: boolean;
   }) => Promise<void>;
   /** Signs out of Firebase Auth, clears the active token from Local Storage, and returns to Login */
   logout: () => Promise<void>;
@@ -66,14 +116,14 @@ const AuthContext = createContext<AuthContextValue>({
   session: null,
   isHydrating: true,
   loginWithEmail: async () => {},
+  registerWithEmail: async () => {},
   loginWithGoogle: async () => {},
-  login: async () => {},
   logout: async () => {},
   setIsLoggedIn: () => {},
 });
 
 /**
- * Provides Firebase Authentication + Local Storage token caching and automatic Login bypass.
+ * Provides real Firebase Authentication + Local Storage token caching and automatic Login bypass.
  */
 export function AuthProvider({ children }: PropsWithChildren) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -81,10 +131,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [isHydrating, setIsHydrating] = useState(true);
 
   /**
-   * Mounting lifecycle (Week 10 Slide 20):
-   * APP OPEN -> READ TOKEN from Local Storage (`AsyncStorage`) -> TOKEN ACTIVE?
-   * - YA: Bypass Login page immediately (`setIsLoggedIn(true)`) and go straight to Home/Dashboard!
-   * - TIDAK: Show Login page.
+   * Mounting lifecycle:
+   * 1. Reads cached session token from Local Storage (`AsyncStorage`). If an active token exists,
+   *    bypasses the Login page immediately (`setIsLoggedIn(true)`).
+   * 2. Subscribes to Firebase `onAuthStateChanged` to keep the token in Local Storage fresh.
    */
   useEffect(() => {
     let active = true;
@@ -92,8 +142,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     async function checkActiveTokenOnMount() {
       const savedSession = await getUserSession();
       if (active) {
-        if (savedSession && Boolean(savedSession.token)) {
-          // Active token found in Local Storage -> bypass Login page immediately
+        if (savedSession && Boolean(savedSession.token) && Boolean(savedSession.uid)) {
           setSession(savedSession);
           setIsLoggedIn(true);
         }
@@ -103,37 +152,26 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     checkActiveTokenOnMount();
 
-    // Also listen to Firebase Auth state changes if Firebase is configured
-    let unsubscribeFirebaseAuth: (() => void) | null = null;
-    if (isFirebaseConfigured && firebaseAuth) {
-      unsubscribeFirebaseAuth = onAuthStateChanged(firebaseAuth, async (fbUser) => {
-        if (!active || !fbUser) return;
-        const token = await fbUser.getIdToken();
-        const syncedSession: UserSession = {
-          uid: fbUser.uid,
-          email: fbUser.email ?? 'user@students.undip.ac.id',
-          displayName: fbUser.displayName ?? undefined,
-          token,
-          loginMethod: fbUser.providerData[0]?.providerId === 'google.com' ? 'google' : 'email',
-          rememberMe: true,
-          loggedInAt: new Date().toISOString(),
-        };
-        setSession(syncedSession);
-        setIsLoggedIn(true);
-        await saveUserSession(syncedSession);
-      });
-    }
+    const unsubscribeFirebaseAuth = onAuthStateChanged(firebaseAuth, async (fbUser) => {
+      if (!active) return;
+      if (fbUser) {
+        const syncedSession = await persistFirebaseUser(fbUser, true);
+        if (active) {
+          setSession(syncedSession);
+          setIsLoggedIn(true);
+        }
+      }
+    });
 
     return () => {
       active = false;
-      if (unsubscribeFirebaseAuth) {
-        unsubscribeFirebaseAuth();
-      }
+      unsubscribeFirebaseAuth();
     };
   }, []);
 
   /**
-   * Authenticates with Email & Password via Firebase Auth (if configured) and persists the token in Local Storage.
+   * Authenticates an existing user with Email & Password via Firebase Auth (`signInWithEmailAndPassword`).
+   * Throws an error if credentials are invalid so the Login UI displays the error message.
    */
   const loginWithEmail = async ({
     email,
@@ -141,131 +179,91 @@ export function AuthProvider({ children }: PropsWithChildren) {
     rememberMe,
   }: {
     email: string;
-    password?: string;
+    password: string;
     rememberMe: boolean;
   }) => {
-    const cleanEmail = email.trim() || 'mahasiswa@students.undip.ac.id';
-    const cleanPassword = password && password.length >= 6 ? password : 'password123';
-
-    let uid = `uid_${Date.now()}`;
-    let token = `jwt_email_${Date.now()}`;
-
-    if (isFirebaseConfigured && firebaseAuth) {
-      try {
-        const cred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
-        uid = cred.user.uid;
-        token = await cred.user.getIdToken();
-      } catch {
-        try {
-          const created = await createUserWithEmailAndPassword(
-            firebaseAuth,
-            cleanEmail,
-            cleanPassword
-          );
-          uid = created.user.uid;
-          token = await created.user.getIdToken();
-        } catch (err) {
-          console.warn('Firebase Email Auth fallback to local token session:', err);
-        }
-      }
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      throw new Error('Silakan masukkan alamat email Anda.');
+    }
+    if (!password) {
+      throw new Error('Silakan masukkan kata sandi Anda.');
     }
 
-    const newSession: UserSession = {
-      uid,
-      email: cleanEmail,
-      token,
-      loginMethod: 'email',
-      rememberMe,
-      loggedInAt: new Date().toISOString(),
-    };
+    const cred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, password);
+    const newSession = await persistFirebaseUser(cred.user, rememberMe);
+    setSession(newSession);
+    setIsLoggedIn(true);
+  };
 
-    await saveUserSession(newSession);
+  /**
+   * Registers a new user account with Email & Password via Firebase Auth (`createUserWithEmailAndPassword`)
+   * and immediately signs them in.
+   */
+  const registerWithEmail = async ({
+    email,
+    password,
+    rememberMe,
+  }: {
+    email: string;
+    password: string;
+    rememberMe: boolean;
+  }) => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      throw new Error('Silakan masukkan alamat email untuk mendaftar.');
+    }
+    if (!password || password.length < 6) {
+      throw new Error('Kata sandi wajib diisi minimal 6 karakter.');
+    }
+
+    const cred = await createUserWithEmailAndPassword(firebaseAuth, cleanEmail, password);
+    const newSession = await persistFirebaseUser(cred.user, rememberMe);
     setSession(newSession);
     setIsLoggedIn(true);
   };
 
   /**
    * Authenticates with Google via Firebase Authentication (`GoogleAuthProvider`)
-   * and saves the resulting user info & active token into Local Storage (`AsyncStorage`).
+   * and saves the resulting user info & active JWT token into Local Storage (`AsyncStorage`).
    */
   const loginWithGoogle = async (params?: {
     idToken?: string | null;
-    email?: string;
+    accessToken?: string | null;
     rememberMe?: boolean;
   }) => {
-    let uid = `google_uid_${Date.now()}`;
-    let userEmail = params?.email?.trim() || 'google.user@students.undip.ac.id';
-    let displayName: string | undefined = 'Google User';
-    let token = params?.idToken || `jwt_google_${Date.now()}`;
-
-    if (isFirebaseConfigured && firebaseAuth) {
-      try {
-        if (params?.idToken) {
-          // Native / Expo Auth Session ID Token -> Firebase GoogleAuthProvider credential
-          const credential = GoogleAuthProvider.credential(params.idToken);
-          const result = await signInWithCredential(firebaseAuth, credential);
-          uid = result.user.uid;
-          userEmail = result.user.email ?? userEmail;
-          displayName = result.user.displayName ?? displayName;
-          token = await result.user.getIdToken();
-        } else if (Platform.OS === 'web') {
-          // Web popup flow with Firebase GoogleAuthProvider
-          const provider = new GoogleAuthProvider();
-          const result = await signInWithPopup(firebaseAuth, provider);
-          uid = result.user.uid;
-          userEmail = result.user.email ?? userEmail;
-          displayName = result.user.displayName ?? displayName;
-          token = await result.user.getIdToken();
-        }
-      } catch (error) {
-        console.warn('Firebase Google Sign-In fallback to local session token:', error);
-      }
+    if (params?.idToken || params?.accessToken) {
+      const credential = GoogleAuthProvider.credential(
+        params.idToken ?? null,
+        params.accessToken ?? undefined
+      );
+      const result = await signInWithCredential(firebaseAuth, credential);
+      const newSession = await persistFirebaseUser(result.user, params.rememberMe ?? true);
+      setSession(newSession);
+      setIsLoggedIn(true);
+      return;
     }
 
-    const newSession: UserSession = {
-      uid,
-      email: userEmail,
-      displayName,
-      token,
-      loginMethod: 'google',
-      rememberMe: params?.rememberMe ?? true,
-      loggedInAt: new Date().toISOString(),
-    };
-
-    await saveUserSession(newSession);
-    setSession(newSession);
-    setIsLoggedIn(true);
-  };
-
-  /**
-   * Unified login helper supporting both `'email'` and `'google'`.
-   */
-  const login = async ({
-    email,
-    loginMethod,
-    rememberMe,
-  }: {
-    email: string;
-    loginMethod: 'email' | 'google';
-    rememberMe: boolean;
-  }) => {
-    if (loginMethod === 'google') {
-      await loginWithGoogle({ email, rememberMe });
-    } else {
-      await loginWithEmail({ email, rememberMe });
+    if (Platform.OS === 'web') {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(firebaseAuth, provider);
+      const newSession = await persistFirebaseUser(result.user, params?.rememberMe ?? true);
+      setSession(newSession);
+      setIsLoggedIn(true);
+      return;
     }
+
+    throw new Error('Token Google OAuth tidak ditemukan. Pastikan login Google diselesaikan.');
   };
 
   /**
    * Signs out of Firebase Authentication and deletes the cached token from Local Storage.
    */
   const logout = async () => {
-    if (isFirebaseConfigured && firebaseAuth) {
-      try {
-        await signOut(firebaseAuth);
-      } catch (error) {
-        console.warn('Firebase signOut warning:', error);
-      }
+    try {
+      await signOut(firebaseAuth);
+    } catch (error) {
+      console.warn('Firebase signOut warning:', error);
     }
     await clearUserSession();
     setSession(null);
@@ -279,8 +277,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         session,
         isHydrating,
         loginWithEmail,
+        registerWithEmail,
         loginWithGoogle,
-        login,
         logout,
         setIsLoggedIn,
       }}>

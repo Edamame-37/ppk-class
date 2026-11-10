@@ -1,10 +1,8 @@
 /**
  * @file firebase.ts
- * @description Firebase SDK configuration for React Native (Expo SDK 58).
- * Initializes Firebase App, Firebase Authentication (`auth`), and Cloud Firestore (`db`)
- * per Week 10 Slides 17–20. Supports environment variables (`EXPO_PUBLIC_FIREBASE_*`)
- * and gracefully falls back to local offline-first storage if Firebase credentials
- * have not yet been populated in `.env`.
+ * @description Real Firebase SDK configuration for the `ppk-class` project.
+ * Initializes Firebase App, Firebase Authentication (`firebaseAuth`), and Cloud Firestore (`firestoreDb`)
+ * connected directly to the live `ppk-class` Firebase project.
  */
 
 import { FirebaseApp, getApp, getApps, initializeApp } from 'firebase/app';
@@ -12,46 +10,41 @@ import { Auth, getAuth } from 'firebase/auth';
 import { Firestore, getFirestore } from 'firebase/firestore';
 
 /**
- * Firebase configuration read from Expo public environment variables.
+ * Firebase configuration for the `ppk-class` project.
+ * Reads from `EXPO_PUBLIC_FIREBASE_*` environment variables with the project's default config values.
  */
-const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '',
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? '',
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? '',
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ?? '',
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '',
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? '',
+export const firebaseConfig = {
+  apiKey:
+    process.env.EXPO_PUBLIC_FIREBASE_API_KEY ||
+    'AIzaSyC-_-ejKfB2QnZGbavZwo_otQ8zAQXvsag',
+  authDomain:
+    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || 'ppk-class.firebaseapp.com',
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || 'ppk-class',
+  storageBucket:
+    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ||
+    'ppk-class.firebasestorage.app',
+  messagingSenderId:
+    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '505993093899',
+  appId:
+    process.env.EXPO_PUBLIC_FIREBASE_APP_ID ||
+    '1:505993093899:web:919943c9f2779108be780e',
+  measurementId:
+    process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID || 'G-9KDNKQE1PY',
 };
 
 /**
- * Indicates whether valid Firebase project credentials are configured.
+ * Google OAuth Web Client ID from Firebase Console -> Authentication -> Sign-in method -> Google.
  */
-export const isFirebaseConfigured = Boolean(
-  firebaseConfig.apiKey &&
-    firebaseConfig.projectId &&
-    firebaseConfig.apiKey !== 'your_firebase_api_key'
-);
+export const GOOGLE_WEB_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+  '505993093899-eb47b19ilpqn80hq5i3u4dvb5p9ob0q8.apps.googleusercontent.com';
 
-let appInstance: FirebaseApp | null = null;
-let authInstance: Auth | null = null;
-let dbInstance: Firestore | null = null;
-
-if (isFirebaseConfigured) {
-  try {
-    appInstance = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    authInstance = getAuth(appInstance);
-    dbInstance = getFirestore(appInstance);
-  } catch (error) {
-    console.warn('Firebase initialization warning (falling back to local storage):', error);
-  }
-}
-
-/** Initialized Firebase App instance (or null if `.env` is not configured yet) */
-export const firebaseApp = appInstance;
+/** Initialized Firebase App instance */
+export const firebaseApp: FirebaseApp =
+  getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 /** Initialized Firebase Authentication instance */
-export const firebaseAuth = authInstance;
+export const firebaseAuth: Auth = getAuth(firebaseApp);
 
 /** Initialized Cloud Firestore database instance */
-export const firestoreDb = dbInstance;
-
+export const firestoreDb: Firestore = getFirestore(firebaseApp);

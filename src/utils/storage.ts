@@ -1,14 +1,15 @@
 /**
  * @file storage.ts
- * @description Local Key-Value Persistent Storage module applying Week 10 concepts:
- * - Stores login session information (`uid`, `email`, `displayName`, `token`, `loginMethod`) in `AsyncStorage`
- * - Enables instant Login page bypass when an active token exists in Local Storage (Week 10 Slide 20)
- * - Caches the database student list (`students`) locally using `JSON.stringify` / `JSON.parse`
+ * @description Local Key-Value Persistent Storage module (`AsyncStorage`) without any hardcoded data:
+ * 1. Persists authenticated Firebase user session & JWT token (`@ppk_class:auth_session`)
+ *    so the Login page is bypassed automatically while an active token exists.
+ * 2. Caches the student list fetched from Cloud Firestore (`@ppk_class:students_list`) for offline reading.
+ * 3. Saves the login form draft when `AppState` moves to `background` (`@ppk_class:login_draft`).
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { STUDENTS_DATA, Student } from '@/constants/students';
+import { Student } from '@/constants/students';
 
 /**
  * Storage keys used across the application.
@@ -20,27 +21,27 @@ export const STORAGE_KEYS = {
 } as const;
 
 /**
- * Represents a persisted user authentication session stored in Local Storage (Week 10 Slide 8 & 20).
+ * Represents a persisted Firebase user authentication session stored in Local Storage.
  */
 export interface UserSession {
-  /** Unique user identifier from Firebase Auth or local session */
+  /** Firebase Auth UID */
   uid: string;
-  /** User email address */
+  /** Authenticated user email address */
   email: string;
   /** Optional display name from Google Sign-In or profile */
   displayName?: string;
-  /** Active authentication token used to bypass the Login page on subsequent app opens */
+  /** Active Firebase ID token (JWT) used to bypass the Login page on subsequent app opens */
   token: string;
   /** Authentication provider method (`'email'` | `'google'`) */
   loginMethod: 'email' | 'google';
   /** Whether the user checked Remember Me */
   rememberMe: boolean;
-  /** ISO timestamp when the user signed in */
+  /** ISO timestamp when the session was saved */
   loggedInAt: string;
 }
 
 /**
- * Represents a saved login form draft when the app transitions to background (Week 9 Slide 23).
+ * Represents a saved login form draft when the app transitions to background.
  */
 export interface LoginDraft {
   email: string;
@@ -54,7 +55,7 @@ export interface LoginDraft {
 const memoryCache = new Map<string, string>();
 
 /**
- * Saves the authenticated user's login information and token to Local Storage (`JSON.stringify`).
+ * Saves the authenticated Firebase user's login information and token to Local Storage (`JSON.stringify`).
  *
  * @param session - The user session object to persist
  */
@@ -105,9 +106,9 @@ export async function clearUserSession(): Promise<void> {
 }
 
 /**
- * Saves the student list to persistent Local Storage (`JSON.stringify`).
+ * Caches the student list fetched from Cloud Firestore into Local Storage (`JSON.stringify`).
  *
- * @param students - Array of Student records to persist
+ * @param students - Array of Student records from Cloud Firestore
  */
 export async function saveStudentsData(students: readonly Student[]): Promise<void> {
   try {
@@ -115,15 +116,15 @@ export async function saveStudentsData(students: readonly Student[]): Promise<vo
     memoryCache.set(STORAGE_KEYS.STUDENTS_LIST, serialized);
     await AsyncStorage.setItem(STORAGE_KEYS.STUDENTS_LIST, serialized);
   } catch (error) {
-    console.error('Failed to save students data:', error);
+    console.error('Failed to save students cache:', error);
   }
 }
 
 /**
- * Loads the persisted student list from Local Storage (`JSON.parse`).
- * Seeds storage with the 5 initial students (`STUDENTS_DATA`) if none exist yet.
+ * Reads the cached student list from Local Storage (`JSON.parse`).
+ * Returns an empty array `[]` if no data has been cached from Firestore yet.
  *
- * @returns Array of Student records
+ * @returns Array of cached Student records
  */
 export async function getStudentsData(): Promise<Student[]> {
   try {
@@ -131,32 +132,19 @@ export async function getStudentsData(): Promise<Student[]> {
     if (raw) {
       memoryCache.set(STORAGE_KEYS.STUDENTS_LIST, raw);
       const parsed = JSON.parse(raw) as Student[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
-    const initial = [...STUDENTS_DATA];
-    await saveStudentsData(initial);
-    return initial;
+    return [];
   } catch (error) {
-    console.error('Failed to load students data:', error);
-    return [...STUDENTS_DATA];
+    console.error('Failed to read students cache:', error);
+    return [];
   }
 }
 
 /**
- * Resets the persisted student list back to the 5 initial students.
- *
- * @returns The default 5 Student records
- */
-export async function resetStudentsData(): Promise<Student[]> {
-  const initial = [...STUDENTS_DATA];
-  await saveStudentsData(initial);
-  return initial;
-}
-
-/**
- * Saves the login form draft when `AppState` moves to `background` (Week 9 Slide 23).
+ * Saves the login form draft when `AppState` moves to `background`.
  *
  * @param draft - Draft containing current email and rememberMe state
  */

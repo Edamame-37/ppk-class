@@ -1,15 +1,14 @@
 /**
  * @file students.ts
- * @description Hardcoded student dataset and TypeScript interfaces for the PPK Class Dashboard.
- * Contains 5 student records (Asep, Mamat, Yanto, Udin, Rahmat) all in the Informatika study program,
- * with NIM format `240601241<2|3|4>0<3 digits>`.
+ * @description TypeScript interface representing a student document stored in the
+ * Cloud Firestore `students` collection. Contains no hardcoded data.
  */
 
 /**
- * Represents a single student record displayed on the dashboard.
+ * Represents a single student record stored in Cloud Firestore (`students` collection).
  */
 export interface Student {
-  /** Unique identifier for rendering list keys */
+  /** Firestore document ID */
   id: string;
   /** Name of the student (Nama Mahasiswa) */
   nama: string;
@@ -18,39 +17,3 @@ export interface Student {
   /** Study program or major (Program Studi) */
   programStudi: string;
 }
-
-/**
- * Hardcoded list of 5 students containing Nama, NIM (`240601241<2|3|4>0<3 digits>`), and Program Studi (`Informatika`).
- */
-export const STUDENTS_DATA: readonly Student[] = [
-  {
-    id: 'mhs-1',
-    nama: 'Asep',
-    nim: '24060124120014',
-    programStudi: 'Informatika',
-  },
-  {
-    id: 'mhs-2',
-    nama: 'Mamat',
-    nim: '24060124130058',
-    programStudi: 'Informatika',
-  },
-  {
-    id: 'mhs-3',
-    nama: 'Yanto',
-    nim: '24060124140112',
-    programStudi: 'Informatika',
-  },
-  {
-    id: 'mhs-4',
-    nama: 'Udin',
-    nim: '24060124120037',
-    programStudi: 'Informatika',
-  },
-  {
-    id: 'mhs-5',
-    nama: 'Rahmat',
-    nim: '24060124140145',
-    programStudi: 'Informatika',
-  },
-];
