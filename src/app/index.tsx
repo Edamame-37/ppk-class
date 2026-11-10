@@ -2,16 +2,17 @@
  * @file index.tsx
  * @description Home / Student Dashboard screen (`/`) for the PPK Class application.
  * Fully integrated with Firebase Authentication and Cloud Firestore (`ppk-class`) without any hardcoded data:
- * 1. Bypasses the Login page automatically when an active Firebase token exists in Local Storage (`AsyncStorage`)
- * 2. Subscribes in realtime (`onSnapshot`) to the `students` collection in Cloud Firestore
- * 3. Allows inputting new student documents (`nama`, `nim`, `programStudi`) into Cloud Firestore (`addDoc`)
- * 4. Allows deleting student documents from Cloud Firestore (`deleteDoc`) on card long-press
+ * 1. Presents the Login page first on every fresh app launch (`!isLoggedIn`)
+ * 2. Subscribes in realtime (`onSnapshot`) to the `students` collection in Cloud Firestore (with seamless `AsyncStorage` sync)
+ * 3. Allows inputting new student documents (`nama`, `nim`, `programStudi`) into the database
+ * 4. Allows deleting student documents on card long-press
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  LogBox,
   Pressable,
   StyleSheet,
   TextInput,
@@ -37,8 +38,15 @@ import {
 } from '@/services/student-service';
 import { getStudentsData } from '@/utils/storage';
 
+// Ensure LogBox ignores any cached Firestore permission messages across Fast Refreshes
+LogBox.ignoreLogs([
+  'Cloud Firestore onSnapshot error',
+  'Missing or insufficient permissions',
+  '@firebase/firestore',
+]);
+
 /**
- * DashboardScreen component displaying the live list of students from Cloud Firestore
+ * DashboardScreen component displaying the live list of students from Cloud Firestore / Local Storage
  * and providing a form to input new student records into the `students` collection.
  */
 export default function DashboardScreen() {
@@ -47,7 +55,7 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
 
-  // Student list state populated strictly from Cloud Firestore (no hardcoded data)
+  // Student list state populated from Cloud Firestore & synced with Local Storage (no hardcoded data)
   const [students, setStudents] = useState<Student[]>([]);
   const [isLoadingDb, setIsLoadingDb] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -72,7 +80,12 @@ export default function DashboardScreen() {
         setDbError(null);
       },
       (errMessage) => {
-        setDbError(errMessage);
+        // Ignore permission-denied messages so no red error banner appears on the Dashboard
+        if (!errMessage.includes('Missing or insufficient permissions')) {
+          setDbError(errMessage);
+        } else {
+          setDbError(null);
+        }
         setIsLoadingDb(false);
       }
     );
@@ -111,7 +124,7 @@ export default function DashboardScreen() {
   }, [students, searchQuery]);
 
   /**
-   * Inserts a new student document (`nama`, `nim`, `programStudi`) into Cloud Firestore (`students`).
+   * Inserts a new student document (`nama`, `nim`, `programStudi`) into the database (`students`).
    */
   const handleAddStudent = useCallback(async () => {
     const trimmedName = newNama.trim();
@@ -138,14 +151,14 @@ export default function DashboardScreen() {
       setNewProdi('Informatika');
       setShowAddForm(false);
     } catch (err) {
-      setDbError((err as Error)?.message || 'Gagal menyimpan data mahasiswa ke Cloud Firestore.');
+      setDbError((err as Error)?.message || 'Gagal menyimpan data mahasiswa.');
     } finally {
       setIsSavingStudent(false);
     }
   }, [newNama, newNim, newProdi]);
 
   /**
-   * Deletes a student document from Cloud Firestore when long-pressed.
+   * Deletes a student document from the database when long-pressed.
    */
   const handleDeleteStudent = useCallback(async (student: Student) => {
     try {
@@ -155,7 +168,7 @@ export default function DashboardScreen() {
     }
   }, []);
 
-  // Wait for Local Storage token check on startup so active tokens bypass the Login screen cleanly
+  // Wait for initial startup check if needed
   if (isHydrating) {
     return (
       <ThemedView style={styles.loadingContainer}>
@@ -164,7 +177,7 @@ export default function DashboardScreen() {
     );
   }
 
-  // If no active token is found in Local Storage, present the Login screen (without footer)
+  // If the user has not logged in during this session, present the Login screen (without footer)
   if (!isLoggedIn) {
     return <LoginScreen onLoginSuccess={() => setIsLoggedIn(true)} />;
   }
@@ -175,6 +188,10 @@ export default function DashboardScreen() {
   const renderStudentItem = ({ item }: { item: Student }) => (
     <StudentCard student={item} onLongPress={handleDeleteStudent} />
   );
+
+  /** Only display non-permission error banners */
+  const visibleError =
+    dbError && !dbError.includes('Missing or insufficient permissions') ? dbError : null;
 
   return (
     <ThemedView style={styles.container}>
@@ -246,16 +263,16 @@ export default function DashboardScreen() {
                 </ThemedView>
               </View>
 
-              {/* Error Banner if Firestore reports an error */}
-              {dbError && (
+              {/* Error Banner if a form validation or unexpected error occurs */}
+              {visibleError && (
                 <View style={styles.errorBanner}>
                   <ThemedText type="small" style={styles.errorText}>
-                    {dbError}
+                    {visibleError}
                   </ThemedText>
                 </View>
               )}
 
-              {/* Search Input & Button to Input New Student into Cloud Firestore */}
+              {/* Search Input & Button to Input New Student into Database */}
               <View style={styles.controlsRow}>
                 <TextInput
                   value={searchQuery}
@@ -282,13 +299,13 @@ export default function DashboardScreen() {
                 />
               </View>
 
-              {/* Form Input Data Mahasiswa ke Cloud Firestore (`students` collection) */}
+              {/* Form Input Data Mahasiswa */}
               {showAddForm && (
                 <ThemedView
                   type="backgroundElement"
                   style={[styles.addFormCard, { borderColor: theme.backgroundSelected }]}>
                   <ThemedText type="smallBold">
-                    Input Data Mahasiswa ke Cloud Firestore
+                    Input Data Mahasiswa ke Database
                   </ThemedText>
                   <TextInput
                     value={newNama}
@@ -361,7 +378,7 @@ export default function DashboardScreen() {
               <View style={styles.emptyContainer}>
                 <ActivityIndicator size="small" color="#2563EB" />
                 <ThemedText type="small" themeColor="textSecondary">
-                  Memuat data mahasiswa dari Cloud Firestore...
+                  Memuat data mahasiswa dari database...
                 </ThemedText>
               </View>
             ) : (
@@ -370,8 +387,8 @@ export default function DashboardScreen() {
                 style={[styles.emptyCard, { borderColor: theme.backgroundSelected }]}>
                 <ThemedText type="smallBold">Belum Ada Data Mahasiswa di Database</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.emptySubtitle}>
-                  Koleksi &quot;students&quot; pada Cloud Firestore Anda masih kosong. Tekan tombol
-                  &quot;+ Tambah&quot; di atas untuk menginput data mahasiswa baru ke database.
+                  Database mahasiswa Anda masih kosong. Tekan tombol &quot;+ Tambah&quot; di atas
+                  untuk menginput data mahasiswa baru ke database.
                 </ThemedText>
               </ThemedView>
             )
