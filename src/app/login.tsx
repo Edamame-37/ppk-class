@@ -1,21 +1,11 @@
 /**
  * @file login.tsx
- * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
- * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
- * 2. 100% Built-in Google Sign-In via Chrome Custom Tabs (`WebBrowser.openAuthSessionAsync`):
- *    - Initiates the OAuth handshake through Firebase's official `https://ppk-class.firebaseapp.com/__/auth/handler`
- *      endpoint with `authType=signInViaRedirect`, `providerId=google.com`, and `prompt=select_account`.
- *    - This stores the required initial OAuth state in `sessionStorage` of `ppk-class.firebaseapp.com` first
- *      (preventing the `Unable to process request due to missing initial state` error) and then redirects Chrome
- *      to Google's genuine "Choose an account" screen showing all of the user's Google accounts plus "Use another account".
- * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
+ * @description Firebase email/password login, account registration, and Google sign-in.
  */
 
 import { Image } from 'expo-image';
-import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -30,67 +20,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { firebaseConfig } from '@/config/firebase';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatFirebaseAuthError, useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
-
-// Complete any pending web browser auth session redirect
-WebBrowser.maybeCompleteAuthSession();
-
-/**
- * Builds the official Firebase Authentication OAuth handler URL (`/__/auth/handler`)
- * with `authType=signInViaRedirect` and `providerId=google.com`.
- * Visiting `/__/auth/handler` first initializes `sessionStorage` on `ppk-class.firebaseapp.com`
- * before redirecting to `accounts.google.com`, preventing the "missing initial state" error.
- */
-function buildGoogleOAuthUrl(): string {
-  const handlerBase = `https://${firebaseConfig.authDomain}/__/auth/handler`;
-  const redirectUrl = `https://${firebaseConfig.authDomain}/__/auth/iframe`;
-  const eventId = `${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-  const customParameters = JSON.stringify({ prompt: 'select_account' });
-
-  const params = new URLSearchParams({
-    apiKey: firebaseConfig.apiKey,
-    appName: '[DEFAULT]',
-    authType: 'signInViaRedirect',
-    redirectUrl,
-    v: '11.0.0',
-    eventId,
-    providerId: 'google.com',
-    customParameters,
-    scopes: 'email,profile',
-  });
-
-  return `${handlerBase}?${params.toString()}`;
-}
-
-/**
- * Extracts `id_token`, `access_token`, or `error` parameters from a Google OAuth redirect URL.
- */
-function parseGoogleRedirectParams(url: string): {
-  idToken: string | null;
-  accessToken: string | null;
-  error: string | null;
-} {
-  const hashIndex = url.indexOf('#');
-  const queryIndex = url.indexOf('?');
-  const rawParams =
-    hashIndex !== -1
-      ? url.slice(hashIndex + 1)
-      : queryIndex !== -1
-        ? url.slice(queryIndex + 1)
-        : '';
-
-  const params = new URLSearchParams(rawParams);
-  return {
-    idToken: params.get('id_token'),
-    accessToken: params.get('access_token'),
-    error: params.get('error'),
-  };
-}
 
 /**
  * Props for the LoginScreen component.
@@ -102,7 +36,7 @@ export interface LoginScreenProps {
 
 /**
  * LoginScreen component providing real Email/Password Login, Account Registration,
- * and built-in Google Sign-In (`accounts.google.com` in Chrome) via Firebase Authentication.
+ * and Google Sign-In via Firebase Authentication.
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
@@ -116,12 +50,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Refs to hold latest form values for the AppState background listener
-  const emailRef = useRef(email);
-  emailRef.current = email;
-  const rememberMeRef = useRef(rememberMe);
-  rememberMeRef.current = rememberMe;
 
   // Restore any previously saved email draft from AsyncStorage on mount
   useEffect(() => {
@@ -150,8 +78,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   useAppState({
     onBackground: () => {
       saveLoginDraft({
-        email: emailRef.current,
-        rememberMe: rememberMeRef.current,
+        email,
+        rememberMe,
         savedAt: new Date().toISOString(),
       });
     },
@@ -190,67 +118,22 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Opens Google's genuine built-in "Choose an account" page (`accounts.google.com`)
-   * in the device's Chrome browser (`WebBrowser.openAuthSessionAsync`) via Firebase's
-   * `/__/auth/handler` endpoint so `sessionStorage` state is initialized properly.
+   * Completes Google sign-in before navigating to the Dashboard.
    */
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
     setIsSubmitting(true);
 
     try {
-      if (Platform.OS === 'web') {
-        await loginWithGoogle({ rememberMe });
-        if (onLoginSuccess) {
-          onLoginSuccess();
-        } else {
-          router.replace('/');
-        }
+      const signedIn = await loginWithGoogle({ rememberMe });
+      if (!signedIn) {
         return;
       }
 
-      const authUrl = buildGoogleOAuthUrl();
-      const returnUrl = Linking.createURL('/');
-      const openedAt = Date.now();
-
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
-      const elapsedMs = Date.now() - openedAt;
-
-      if (result.type === 'success' && result.url) {
-        const { idToken, accessToken, error } = parseGoogleRedirectParams(result.url);
-        if (error) {
-          setErrorMessage(`Login Google gagal: ${error}`);
-          return;
-        }
-        if (idToken || accessToken) {
-          await loginWithGoogle({
-            idToken,
-            accessToken,
-            rememberMe: rememberMeRef.current,
-          });
-          if (onLoginSuccess) {
-            onLoginSuccess();
-          } else {
-            router.replace('/');
-          }
-          return;
-        }
-      }
-
-      // Complete the Firebase Authentication session upon returning from Chrome Custom Tabs
-      if (elapsedMs >= 1500) {
-        const activeGoogleEmail =
-          email.trim().includes('@') ? email.trim().toLowerCase() : 'ra07zlan@gmail.com';
-        await loginWithGoogle({
-          googleEmail: activeGoogleEmail,
-          rememberMe: rememberMeRef.current,
-        });
-
-        if (onLoginSuccess) {
-          onLoginSuccess();
-        } else {
-          router.replace('/');
-        }
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      } else {
+        router.replace('/');
       }
     } catch (err) {
       setErrorMessage(formatFirebaseAuthError(err));

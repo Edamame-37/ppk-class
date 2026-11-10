@@ -1,28 +1,19 @@
 /**
  * @file auth-context.tsx
- * @description Real Firebase Authentication context for `ppk-class`:
- * 1. Always starts at the Login screen (`isLoggedIn = false`) every time the app is opened.
- * 2. Supports Manual Email/Password Sign-In (`signInWithEmailAndPassword`) & Registration (`createUserWithEmailAndPassword`).
- * 3. Supports Google Sign-In via Firebase Authentication (`loginWithGoogle`) across both Web (`signInWithPopup`)
- *    and Expo Go Mobile (authenticating the user's Google account directly against `firebaseAuth` without triggering
- *    Google OAuth's `Custom scheme URIs are not allowed for 'WEB' client type` block).
- * 4. Persists authenticated user info & Firebase JWT token in Local Storage (`AsyncStorage`) for the active session.
+ * @description Firebase email/password and Google authentication with active-session storage.
+ * Each fresh app launch starts on the Login screen.
  */
 
 import {
   createUserWithEmailAndPassword,
-  GoogleAuthProvider,
-  signInWithCredential,
   signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
-  updateProfile,
   User,
 } from 'firebase/auth';
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
 
 import { firebaseAuth } from '@/config/firebase';
+import { signInWithGoogle } from '@/services/google-auth';
 import {
   clearUserSession,
   saveUserSession,
@@ -107,14 +98,10 @@ export interface AuthContextValue {
     password: string;
     rememberMe: boolean;
   }) => Promise<void>;
-  /** Signs the user in with Google via Firebase Auth */
+  /** Signs in with Google; returns false when the user cancels. */
   loginWithGoogle: (params?: {
-    idToken?: string | null;
-    accessToken?: string | null;
-    googleEmail?: string;
-    googlePassword?: string;
     rememberMe?: boolean;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   /** Signs out of Firebase Auth, clears the active token from Local Storage, and returns to Login */
   logout: () => Promise<void>;
   /** Direct setter for login state */
@@ -127,7 +114,7 @@ const AuthContext = createContext<AuthContextValue>({
   isHydrating: false,
   loginWithEmail: async () => {},
   registerWithEmail: async () => {},
-  loginWithGoogle: async () => {},
+  loginWithGoogle: async () => false,
   logout: async () => {},
   setIsLoggedIn: () => {},
 });
@@ -146,8 +133,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
    * is always presented with the Login screen first before entering the Dashboard.
    */
   useEffect(() => {
-    setIsLoggedIn(false);
-    setSession(null);
     clearUserSession();
     signOut(firebaseAuth).catch(() => {});
   }, []);
@@ -206,111 +191,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
   };
 
   /**
-   * Authenticates with Google via Firebase Authentication and saves the resulting
-   * user info & active JWT token into Local Storage (`AsyncStorage`).
-   * - If OAuth `idToken` / `accessToken` is supplied, signs in via `GoogleAuthProvider.credential`.
-   * - If `googleEmail` is supplied (Expo Go mobile flow), authenticates the Google account directly
-   *   with Firebase Authentication (`firebaseAuth`) to avoid Google's `Custom scheme URIs are not allowed` error.
-   * - On Web without parameters, uses `signInWithPopup(firebaseAuth, new GoogleAuthProvider())`.
+   * Saves a verified Firebase Google sign-in result. Cancellation leaves session state unchanged.
    */
   const loginWithGoogle = async (params?: {
-    idToken?: string | null;
-    accessToken?: string | null;
-    googleEmail?: string;
-    googlePassword?: string;
     rememberMe?: boolean;
-  }) => {
-    const remember = params?.rememberMe ?? true;
-
-    // 1. OAuth Token flow (if idToken or accessToken is present)
-    if (params?.idToken || params?.accessToken) {
-      const credential = GoogleAuthProvider.credential(
-        params.idToken ?? null,
-        params.accessToken ?? undefined
-      );
-      const result = await signInWithCredential(firebaseAuth, credential);
-      const newSession = await persistFirebaseUser(result.user, remember, 'google');
-      setSession(newSession);
-      setIsLoggedIn(true);
-      return;
+  }): Promise<boolean> => {
+    const result = await signInWithGoogle();
+    if (!result) {
+      return false;
     }
 
-    // 2. Expo Go Mobile / Direct Google Account flow against Firebase Auth
-    if (params?.googleEmail !== undefined) {
-      const cleanEmail = params.googleEmail.trim().toLowerCase();
-      if (!cleanEmail || !cleanEmail.includes('@')) {
-        throw new Error('Masukkan alamat email Google yang valid (contoh: nama@gmail.com).');
-      }
-
-      // Use explicit password if user entered one, or deterministic Google-bridge credential
-      const secret =
-        params.googlePassword && params.googlePassword.length > 0
-          ? params.googlePassword
-          : `GAuth#${cleanEmail}#ppk58`;
-
-      try {
-        const signInResult = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, secret);
-        const newSession = await persistFirebaseUser(signInResult.user, remember, 'google');
-        setSession(newSession);
-        setIsLoggedIn(true);
-        return;
-      } catch (signInError) {
-        const errCode = (signInError as { code?: string })?.code ?? '';
-
-        // If user provided an explicit password and it was wrong, surface the error
-        if (params.googlePassword && params.googlePassword.length > 0) {
-          throw new Error('Kata sandi untuk akun ini tidak sesuai.');
-        }
-
-        // Otherwise, provision the Google account in Firebase Auth
-        if (
-          errCode === 'auth/user-not-found' ||
-          errCode === 'auth/invalid-credential' ||
-          errCode === 'auth/wrong-password'
-        ) {
-          try {
-            const createResult = await createUserWithEmailAndPassword(
-              firebaseAuth,
-              cleanEmail,
-              secret
-            );
-            const nameFromEmail = cleanEmail.split('@')[0];
-            await updateProfile(createResult.user, {
-              displayName: nameFromEmail,
-            }).catch(() => {});
-
-            const newSession = await persistFirebaseUser(createResult.user, remember, 'google');
-            setSession(newSession);
-            setIsLoggedIn(true);
-            return;
-          } catch (createError) {
-            const createCode = (createError as { code?: string })?.code ?? '';
-            if (createCode === 'auth/email-already-in-use') {
-              const needsPwdError = new Error(
-                'Akun email ini sudah terdaftar sebelumnya. Masukkan kata sandi akun Anda untuk melanjutkan.'
-              ) as Error & { code?: string };
-              needsPwdError.code = 'auth/google-account-needs-password';
-              throw needsPwdError;
-            }
-            throw createError;
-          }
-        }
-
-        throw signInError;
-      }
-    }
-
-    // 3. Web Browser Popup flow
-    if (Platform.OS === 'web') {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(firebaseAuth, provider);
-      const newSession = await persistFirebaseUser(result.user, remember, 'google');
-      setSession(newSession);
-      setIsLoggedIn(true);
-      return;
-    }
-
-    throw new Error('Silakan pilih atau masukkan akun Google Anda untuk melanjutkan.');
+    const newSession = await persistFirebaseUser(
+      result.user,
+      params?.rememberMe ?? true,
+      'google'
+    );
+    setSession(newSession);
+    setIsLoggedIn(true);
+    return true;
   };
 
   /**

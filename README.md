@@ -1,5 +1,32 @@
 # ppk-class
 
+## Google Sign-In
+
+Login Google Android/iOS menggunakan SDK native dan membutuhkan development build.
+Di Expo Go, gunakan login email/password. Web tetap menggunakan popup Firebase.
+
+1. Aktifkan provider **Google** di Firebase Console > Authentication > Sign-in method.
+2. Isi `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` di `.env` dengan OAuth Client ID bertipe **Web application** dari proyek Firebase yang sama.
+3. Android: daftarkan package `com.ppkclass.app` (atau nilai `ANDROID_PACKAGE`) dan SHA-1 sertifikat build di Firebase/Google Cloud. Untuk EAS, ambil SHA-1 melalui `npx eas-cli@latest credentials -p android`. Setiap sertifikat development/store yang berbeda perlu didaftarkan. Android Client ID tidak dimasukkan ke kode.
+4. iOS: daftarkan bundle ID `com.ppkclass.app` (atau `IOS_BUNDLE_IDENTIFIER`) dan isi `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`. Config plugin menambahkan URL scheme otomatis.
+5. Pastikan konfigurasi environment yang sama tersedia saat build EAS, lalu buat dan instal development build Android:
+
+   ```bash
+   npx eas-cli@latest build --profile development --platform android
+   npx expo start --dev-client
+   ```
+
+   Untuk iOS, gunakan `--platform ios`. Build ulang setelah mengubah konfigurasi native/OAuth iOS.
+
+Untuk web, jalankan `npm run web` dan pastikan domain aplikasi ada di Firebase Authentication > Settings > Authorized domains.
+
+Verifikasi login berhasil, pemilihan akun berbeda, pembatalan tanpa masuk dashboard, dan login email tetap berjalan. Untuk pemeriksaan kode:
+
+```bash
+npx expo lint
+npx tsc --noEmit
+```
+
 Welcome to your Expo (React Native) app 👋
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
