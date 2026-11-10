@@ -1,22 +1,24 @@
 /**
  * @file storage.ts
- * @description Local Key-Value Persistent Storage module (`AsyncStorage`) without any hardcoded data:
- * 1. Persists authenticated Firebase user session & JWT token (`@ppk_class:auth_session`)
- *    so the Login page is bypassed automatically while an active token exists.
- * 2. Caches the student list fetched from Cloud Firestore (`@ppk_class:students_list`) for offline reading.
+ * @description Local Key-Value Persistent Storage module (`AsyncStorage`):
+ * 1. Persists authenticated Firebase user session & JWT token (`@ppk_class:auth_session`).
+ * 2. Deletes any legacy student inputs (`@ppk_class:students_list`) and persists the clean
+ *    5-student dataset (`@ppk_class:students_list_v2`) synced with Cloud Firestore.
  * 3. Saves the login form draft when `AppState` moves to `background` (`@ppk_class:login_draft`).
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { Student } from '@/constants/students';
+import { INITIAL_STUDENTS_SEED, Student } from '@/constants/students';
 
 /**
  * Storage keys used across the application.
  */
 export const STORAGE_KEYS = {
   AUTH_SESSION: '@ppk_class:auth_session',
-  STUDENTS_LIST: '@ppk_class:students_list',
+  LEGACY_STUDENTS_LIST: '@ppk_class:students_list',
+  STUDENTS_LIST: '@ppk_class:students_list_v2',
+  STUDENTS_SEEDED_FLAG: '@ppk_class:students_seeded_v2',
   LOGIN_DRAFT: '@ppk_class:login_draft',
 } as const;
 
@@ -30,7 +32,7 @@ export interface UserSession {
   email: string;
   /** Optional display name from Google Sign-In or profile */
   displayName?: string;
-  /** Active Firebase ID token (JWT) used to bypass the Login page on subsequent app opens */
+  /** Active Firebase ID token (JWT) */
   token: string;
   /** Authentication provider method (`'email'` | `'google'`) */
   loginMethod: 'email' | 'google';
@@ -71,7 +73,6 @@ export async function saveUserSession(session: UserSession): Promise<void> {
 
 /**
  * Reads the persisted user login session and active token from Local Storage (`JSON.parse`).
- * Used on app launch to bypass the Login screen if an active token is present.
  *
  * @returns The parsed `UserSession` if present, or `null` otherwise
  */
@@ -106,9 +107,40 @@ export async function clearUserSession(): Promise<void> {
 }
 
 /**
- * Caches the student list fetched from Cloud Firestore into Local Storage (`JSON.stringify`).
+ * Deletes any previously inputted student records in the legacy Local Storage key (`@ppk_class:students_list`)
+ * and initializes the fresh `@ppk_class:students_list_v2` storage with the 5 initial students
+ * (`Asep`, `Mamat`, `Yanto`, `Udin`, `Rahmat`).
  *
- * @param students - Array of Student records from Cloud Firestore
+ * @returns The active array of Student records in Local Storage
+ */
+export async function initializeFreshStudentsStorage(): Promise<Student[]> {
+  try {
+    // 1. Always delete legacy key so previous manual test inputs are wiped
+    memoryCache.delete(STORAGE_KEYS.LEGACY_STUDENTS_LIST);
+    await AsyncStorage.removeItem(STORAGE_KEYS.LEGACY_STUDENTS_LIST);
+
+    // 2. Check if v2 has already been initialized with the clean 5-student dataset
+    const alreadySeeded = await AsyncStorage.getItem(STORAGE_KEYS.STUDENTS_SEEDED_FLAG);
+    if (!alreadySeeded) {
+      const freshSeed = [...INITIAL_STUDENTS_SEED];
+      const serialized = JSON.stringify(freshSeed);
+      memoryCache.set(STORAGE_KEYS.STUDENTS_LIST, serialized);
+      await AsyncStorage.setItem(STORAGE_KEYS.STUDENTS_LIST, serialized);
+      await AsyncStorage.setItem(STORAGE_KEYS.STUDENTS_SEEDED_FLAG, 'true');
+      return freshSeed;
+    }
+
+    return await getStudentsData();
+  } catch (error) {
+    console.error('Failed to initialize fresh students storage:', error);
+    return [...INITIAL_STUDENTS_SEED];
+  }
+}
+
+/**
+ * Caches the student list into Local Storage (`JSON.stringify`).
+ *
+ * @param students - Array of Student records
  */
 export async function saveStudentsData(students: readonly Student[]): Promise<void> {
   try {
@@ -122,7 +154,7 @@ export async function saveStudentsData(students: readonly Student[]): Promise<vo
 
 /**
  * Reads the cached student list from Local Storage (`JSON.parse`).
- * Returns an empty array `[]` if no data has been cached from Firestore yet.
+ * If not yet initialized, initializes with the 5 seed students (`INITIAL_STUDENTS_SEED`).
  *
  * @returns Array of cached Student records
  */
@@ -136,10 +168,12 @@ export async function getStudentsData(): Promise<Student[]> {
         return parsed;
       }
     }
-    return [];
+    const seed = [...INITIAL_STUDENTS_SEED];
+    await saveStudentsData(seed);
+    return seed;
   } catch (error) {
     console.error('Failed to read students cache:', error);
-    return [];
+    return [...INITIAL_STUDENTS_SEED];
   }
 }
 
