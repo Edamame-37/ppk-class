@@ -43,7 +43,7 @@ export default function AppTabs() {
 /**
  * Custom tab button component for web navigation.
  * Destructures `ref` out of TabTriggerSlotProps to ensure type compatibility
- * with React Native's Pressable component in Expo SDK 57 / React Native 0.86.
+ * with React Native's Pressable component in Expo SDK 58 / React Native 0.88.
  */
 export function TabButton({ children, isFocused, ref: _ref, ...props }: TabTriggerSlotProps) {
   return (
