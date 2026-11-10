@@ -2,19 +2,19 @@
  * @file login.tsx
  * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
  * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
- * 2. Real Google Sign-In via Firebase Authentication (`loginWithGoogle`):
- *    - Step 1 (`choose-account`): Displays Google's built-in "Choose an account to continue to ppk-class"
- *      (`accounts.google.com`) screen first so the user can pick an existing Google account (`ra07zlan@gmail.com`,
- *      `muginwara@gmail.com`, etc.) in 1 tap.
- *    - Step 2 (`manual-webview`): If the user does not pick an existing account and taps "Use another account",
- *      opens Google's official OAuth 2.0 input page (`https://accounts.google.com/o/oauth2/v2/auth`) inside WebView
- *      so they can input their Google email and password manually.
+ * 2. 100% Genuine Google Sign-In (`https://accounts.google.com/o/oauth2/v2/auth`) via Firebase Authentication:
+ *    - Opens Google's official OAuth 2.0 page directly (no custom/self-made chooser UI)
+ *    - Uses `prompt=select_account` with persistent WebView cookies (`sharedCookiesEnabled`, `thirdPartyCookiesEnabled`,
+ *      `domStorageEnabled`, `cacheEnabled`, `incognito={false}`) so after signing in once, Google's real built-in
+ *      "Choose an account / Pilih akun" screen (with "Use another account") appears automatically on every subsequent login
+ *    - Uses Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler` redirect URI to prevent
+ *      Google's `Error 400: invalid_request (Custom scheme URIs are not allowed for 'WEB' client type)`
  * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -67,8 +67,9 @@ true;
 `;
 
 /**
- * Builds the official Google OAuth 2.0 URL (`accounts.google.com`) using Firebase's
- * pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler` redirect URI.
+ * Builds the official Google OAuth 2.0 URL (`https://accounts.google.com/o/oauth2/v2/auth`)
+ * using `prompt=select_account` and Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler`
+ * redirect URI.
  */
 function buildGoogleOAuthUrl(): string {
   const redirectUri = `https://${firebaseConfig.authDomain}/__/auth/handler`;
@@ -111,15 +112,6 @@ function parseGoogleRedirectParams(url: string): {
 }
 
 /**
- * Metadata for an account item in Google's "Choose an account" screen.
- */
-interface GoogleAccountOption {
-  email: string;
-  name: string;
-  avatarColor: string;
-}
-
-/**
  * Props for the LoginScreen component.
  */
 export interface LoginScreenProps {
@@ -129,7 +121,7 @@ export interface LoginScreenProps {
 
 /**
  * LoginScreen component providing real Email/Password Login, Account Registration,
- * and built-in Google Sign-In (`accounts.google.com`) via Firebase Authentication.
+ * and 100% genuine Google Sign-In (`accounts.google.com`) via Firebase Authentication.
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
@@ -144,16 +136,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Built-in Google Sign-In (`accounts.google.com`) state:
-  // 'choose-account' shows selectable Google accounts first; 'manual-webview' opens manual Google input
-  const [showGoogleScreen, setShowGoogleScreen] = useState(false);
-  const [googleStep, setGoogleStep] = useState<'choose-account' | 'manual-webview'>(
-    'choose-account'
-  );
-  const [selectedGoogleAccount, setSelectedGoogleAccount] = useState<string | null>(null);
-  const [googleAccountPassword, setGoogleAccountPassword] = useState('');
-  const [needsGoogleAccountPassword, setNeedsGoogleAccountPassword] = useState(false);
-  const [googleScreenError, setGoogleScreenError] = useState<string | null>(null);
+  // Genuine Google OAuth (`accounts.google.com`) WebView state
+  const [showGoogleWebView, setShowGoogleWebView] = useState(false);
   const [googleOAuthUrl, setGoogleOAuthUrl] = useState('');
   const [isWebViewLoading, setIsWebViewLoading] = useState(true);
   const handledRedirectRef = useRef(false);
@@ -198,37 +182,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     },
   });
 
-  // Build the list of selectable Google accounts shown on Step 1 ("Choose an account")
-  const availableGoogleAccounts = useMemo<GoogleAccountOption[]>(() => {
-    const baseAccounts: GoogleAccountOption[] = [
-      {
-        email: 'ra07zlan@gmail.com',
-        name: 'Rafa',
-        avatarColor: '#1A73E8',
-      },
-      {
-        email: 'muginwara@gmail.com',
-        name: 'Muginwara',
-        avatarColor: '#1E8E3E',
-      },
-    ];
-
-    const typedEmail = email.trim().toLowerCase();
-    if (
-      typedEmail.includes('@') &&
-      !baseAccounts.some((acc) => acc.email.toLowerCase() === typedEmail)
-    ) {
-      const prefix = typedEmail.split('@')[0];
-      baseAccounts.unshift({
-        email: typedEmail,
-        name: prefix.charAt(0).toUpperCase() + prefix.slice(1),
-        avatarColor: '#9334E6',
-      });
-    }
-
-    return baseAccounts;
-  }, [email]);
-
   /**
    * Handles real Email/Password Sign-In or Registration against Firebase Authentication.
    */
@@ -262,7 +215,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Opens Google's built-in Sign-In screen starting with the "Choose an account" step first.
+   * Opens Google's genuine built-in OAuth 2.0 Sign-In page (`https://accounts.google.com/o/oauth2/v2/auth`).
    */
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
@@ -276,82 +229,22 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         } else {
           router.replace('/');
         }
-        return;
-      } catch {
-        // Fallback to the built-in chooser screen if popup is blocked
+      } catch (err) {
+        setErrorMessage(formatFirebaseAuthError(err));
       } finally {
         setIsSubmitting(false);
       }
+      return;
     }
 
     handledRedirectRef.current = false;
-    setGoogleStep('choose-account');
-    setSelectedGoogleAccount(null);
-    setGoogleAccountPassword('');
-    setNeedsGoogleAccountPassword(false);
-    setGoogleScreenError(null);
-    setShowGoogleScreen(true);
-  };
-
-  /**
-   * Signs in immediately when the user selects one of the Google accounts in Step 1 ("Choose an account").
-   */
-  const handleSelectExistingGoogleAccount = async (
-    targetEmail: string,
-    explicitPassword?: string
-  ) => {
-    setSelectedGoogleAccount(targetEmail);
-    setGoogleScreenError(null);
-
-    try {
-      await saveLoginDraft({
-        email: targetEmail,
-        rememberMe,
-        savedAt: new Date().toISOString(),
-      });
-
-      await loginWithGoogle({
-        googleEmail: targetEmail,
-        googlePassword: explicitPassword,
-        rememberMe,
-      });
-
-      setShowGoogleScreen(false);
-      setSelectedGoogleAccount(null);
-
-      if (onLoginSuccess) {
-        onLoginSuccess();
-      } else {
-        router.replace('/');
-      }
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? '';
-      if (code === 'auth/google-account-needs-password') {
-        setNeedsGoogleAccountPassword(true);
-        setGoogleScreenError(
-          'Masukkan kata sandi akun Anda untuk melanjutkan login.'
-        );
-      } else {
-        setGoogleScreenError(formatFirebaseAuthError(err));
-        setSelectedGoogleAccount(null);
-      }
-    }
-  };
-
-  /**
-   * Switches from "Choose an account" (Step 1) to Google's manual email/password input WebView (Step 2)
-   * when the user taps "Use another account".
-   */
-  const handleUseAnotherGoogleAccount = () => {
-    handledRedirectRef.current = false;
-    setGoogleScreenError(null);
     setIsWebViewLoading(true);
     setGoogleOAuthUrl(buildGoogleOAuthUrl());
-    setGoogleStep('manual-webview');
+    setShowGoogleWebView(true);
   };
 
   /**
-   * Processes the redirect URL from Google's manual Sign-In WebView (`/__/auth/handler#id_token=...`)
+   * Processes the redirect URL from Google's built-in Sign-In page (`/__/auth/handler#id_token=...`)
    * and exchanges the Google token with Firebase Authentication (`GoogleAuthProvider.credential`).
    */
   const handleGoogleRedirectUrl = useCallback(
@@ -366,7 +259,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       }
 
       handledRedirectRef.current = true;
-      setShowGoogleScreen(false);
+      setShowGoogleWebView(false);
 
       if (error) {
         if (error !== 'access_denied') {
@@ -588,217 +481,60 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* Full-screen Built-in Google Sign-In (`accounts.google.com`) */}
+        {/* 100% Genuine Built-in Google Sign-In Page (`https://accounts.google.com`) */}
         <Modal
-          visible={showGoogleScreen}
+          visible={showGoogleWebView}
           animationType="slide"
           onRequestClose={() => {
-            if (googleStep === 'manual-webview') {
-              setGoogleStep('choose-account');
-            } else {
-              setShowGoogleScreen(false);
-            }
+            setShowGoogleWebView(false);
           }}>
-          <SafeAreaView style={styles.googleScreenSafeArea}>
-            {/* Top Browser Bar (`accounts.google.com`) */}
-            <View style={styles.googleBrowserBar}>
+          <SafeAreaView style={styles.webViewSafeArea}>
+            <View style={styles.webViewHeader}>
               <Pressable
-                onPress={() => {
-                  if (googleStep === 'manual-webview') {
-                    setGoogleStep('choose-account');
-                  } else {
-                    setShowGoogleScreen(false);
-                  }
-                }}
-                style={styles.googleBrowserCloseBtn}>
-                <ThemedText style={styles.googleBrowserCloseIcon}>
-                  {googleStep === 'manual-webview' ? '←' : '✕'}
-                </ThemedText>
+                onPress={() => setShowGoogleWebView(false)}
+                style={styles.webViewCloseBtn}>
+                <ThemedText style={styles.webViewCloseIcon}>✕</ThemedText>
               </Pressable>
-              <ThemedText style={styles.googleBrowserDomain} numberOfLines={1}>
+              <ThemedText style={styles.webViewDomain} numberOfLines={1}>
                 accounts.google.com
               </ThemedText>
-              <View style={styles.googleBrowserRightSpacer} />
+              <View style={styles.webViewHeaderSpacer} />
             </View>
 
-            {/* STEP 1: Built-in Google "Choose an account" Screen */}
-            {googleStep === 'choose-account' ? (
-              <ScrollView
-                contentContainerStyle={styles.googleChooserScroll}
-                keyboardShouldPersistTaps="handled">
-                {/* Official "Sign in with Google" Top Subheader */}
-                <View style={styles.googleSubheader}>
-                  <Image
-                    source={require('@/assets/images/google-logo.png')}
-                    style={styles.googleSubheaderLogo}
-                    contentFit="contain"
-                  />
-                  <ThemedText style={styles.googleSubheaderText}>
-                    Sign in with Google
-                  </ThemedText>
-                </View>
-
-                <View style={styles.googleChooserBody}>
-                  {/* App Icon Badge */}
-                  <View style={styles.googleAppBadge}>
-                    <ThemedText style={styles.googleAppBadgeText}>P</ThemedText>
-                  </View>
-
-                  <ThemedText style={styles.googleChooserTitle}>
-                    Choose an account
-                  </ThemedText>
-                  <ThemedText style={styles.googleChooserSubtitle}>
-                    to continue to{' '}
-                    <ThemedText style={styles.googleChooserAppLink}>ppk-class</ThemedText>
-                  </ThemedText>
-
-                  {googleScreenError && (
-                    <View style={styles.googleErrorBox}>
-                      <ThemedText style={styles.googleErrorBoxText}>
-                        {googleScreenError}
-                      </ThemedText>
-                    </View>
-                  )}
-
-                  {/* Selectable Google Accounts List */}
-                  <View style={styles.googleAccountsContainer}>
-                    {availableGoogleAccounts.map((acc) => {
-                      const isThisSelected = selectedGoogleAccount === acc.email;
-                      const initial = acc.name.charAt(0).toUpperCase();
-
-                      return (
-                        <View key={acc.email} style={styles.googleAccountBlock}>
-                          <Pressable
-                            disabled={
-                              Boolean(selectedGoogleAccount) && !needsGoogleAccountPassword
-                            }
-                            onPress={() => {
-                              setNeedsGoogleAccountPassword(false);
-                              setGoogleAccountPassword('');
-                              handleSelectExistingGoogleAccount(acc.email);
-                            }}
-                            style={({ pressed }) => [
-                              styles.googleAccountRow,
-                              pressed && styles.googleAccountRowPressed,
-                            ]}>
-                            <View
-                              style={[
-                                styles.googleAvatarCircle,
-                                { backgroundColor: acc.avatarColor },
-                              ]}>
-                              <ThemedText style={styles.googleAvatarLetter}>
-                                {initial}
-                              </ThemedText>
-                            </View>
-                            <View style={styles.googleAccountTextCol}>
-                              <ThemedText style={styles.googleAccountName}>
-                                {acc.name}
-                              </ThemedText>
-                              <ThemedText style={styles.googleAccountEmail}>
-                                {acc.email}
-                              </ThemedText>
-                            </View>
-                            {isThisSelected && !needsGoogleAccountPassword && (
-                              <ActivityIndicator size="small" color="#1A73E8" />
-                            )}
-                          </Pressable>
-
-                          {/* If this existing account requires its Firebase password */}
-                          {isThisSelected && needsGoogleAccountPassword && (
-                            <View style={styles.googleInlinePasswordBox}>
-                              <TextInput
-                                value={googleAccountPassword}
-                                onChangeText={(val) => {
-                                  setGoogleAccountPassword(val);
-                                  if (googleScreenError) setGoogleScreenError(null);
-                                }}
-                                placeholder="Enter your password"
-                                placeholderTextColor="#5F6368"
-                                secureTextEntry
-                                autoCapitalize="none"
-                                style={styles.googleInlinePasswordInput}
-                              />
-                              <Pressable
-                                onPress={() =>
-                                  handleSelectExistingGoogleAccount(
-                                    acc.email,
-                                    googleAccountPassword
-                                  )
-                                }
-                                style={styles.googleNextButton}>
-                                <ThemedText style={styles.googleNextButtonText}>
-                                  Next
-                                </ThemedText>
-                              </Pressable>
-                            </View>
-                          )}
-                        </View>
-                      );
-                    })}
-
-                    {/* "Use another account" Option -> Opens Manual Google OAuth Input */}
-                    <Pressable
-                      onPress={handleUseAnotherGoogleAccount}
-                      style={({ pressed }) => [
-                        styles.googleAccountRow,
-                        styles.googleUseAnotherRow,
-                        pressed && styles.googleAccountRowPressed,
-                      ]}>
-                      <View style={styles.googleUseAnotherIconCircle}>
-                        <ThemedText style={styles.googleUseAnotherIconText}>+</ThemedText>
-                      </View>
-                      <View style={styles.googleAccountTextCol}>
-                        <ThemedText style={styles.googleUseAnotherLabel}>
-                          Use another account
-                        </ThemedText>
-                      </View>
-                    </Pressable>
-                  </View>
-
-                  {/* Google Standard Privacy / Terms Footer Notice */}
-                  <ThemedText style={styles.googlePrivacyText}>
-                    To continue, Google will share your name, email address, language
-                    preference, and profile picture with ppk-class.
-                  </ThemedText>
-                </View>
-              </ScrollView>
-            ) : (
-              /* STEP 2: Manual Google OAuth Input (`https://accounts.google.com/o/oauth2/v2/auth`) */
-              <View style={styles.webViewContainer}>
-                {isWebViewLoading && (
-                  <View style={styles.webViewLoader}>
-                    <ActivityIndicator size="small" color="#1A73E8" />
-                  </View>
-                )}
-
-                {googleOAuthUrl ? (
-                  <WebView
-                    source={{ uri: googleOAuthUrl }}
-                    userAgent={GOOGLE_OAUTH_USER_AGENT}
-                    javaScriptEnabled
-                    domStorageEnabled
-                    thirdPartyCookiesEnabled
-                    sharedCookiesEnabled
-                    injectedJavaScriptBeforeContentLoaded={INJECTED_OAUTH_LISTENER_JS}
-                    injectedJavaScript={INJECTED_OAUTH_LISTENER_JS}
-                    onLoadStart={(e) => {
-                      setIsWebViewLoading(true);
-                      handleGoogleRedirectUrl(e.nativeEvent.url);
-                    }}
-                    onLoadEnd={() => {
-                      setIsWebViewLoading(false);
-                    }}
-                    onNavigationStateChange={(navState) => {
-                      handleGoogleRedirectUrl(navState.url);
-                    }}
-                    onMessage={(event) => {
-                      handleGoogleRedirectUrl(event.nativeEvent.data);
-                    }}
-                    style={styles.webView}
-                  />
-                ) : null}
+            {isWebViewLoading && (
+              <View style={styles.webViewLoader}>
+                <ActivityIndicator size="small" color="#1A73E8" />
               </View>
             )}
+
+            {googleOAuthUrl ? (
+              <WebView
+                source={{ uri: googleOAuthUrl }}
+                userAgent={GOOGLE_OAUTH_USER_AGENT}
+                javaScriptEnabled
+                domStorageEnabled
+                thirdPartyCookiesEnabled
+                sharedCookiesEnabled
+                cacheEnabled
+                incognito={false}
+                injectedJavaScriptBeforeContentLoaded={INJECTED_OAUTH_LISTENER_JS}
+                injectedJavaScript={INJECTED_OAUTH_LISTENER_JS}
+                onLoadStart={(e) => {
+                  setIsWebViewLoading(true);
+                  handleGoogleRedirectUrl(e.nativeEvent.url);
+                }}
+                onLoadEnd={() => {
+                  setIsWebViewLoading(false);
+                }}
+                onNavigationStateChange={(navState) => {
+                  handleGoogleRedirectUrl(navState.url);
+                }}
+                onMessage={(event) => {
+                  handleGoogleRedirectUrl(event.nativeEvent.data);
+                }}
+                style={styles.webView}
+              />
+            ) : null}
           </SafeAreaView>
         </Modal>
       </SafeAreaView>
@@ -936,12 +672,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  googleScreenSafeArea: {
+  webViewSafeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  googleBrowserBar: {
-    height: 52,
+  webViewHeader: {
+    height: 50,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -950,198 +686,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#DADCE0',
   },
-  googleBrowserCloseBtn: {
+  webViewCloseBtn: {
     width: 36,
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  googleBrowserCloseIcon: {
+  webViewCloseIcon: {
     fontSize: 18,
     color: '#3C4043',
     fontWeight: '600',
   },
-  googleBrowserDomain: {
+  webViewDomain: {
     fontSize: 15,
     color: '#202124',
     fontWeight: '500',
   },
-  googleBrowserRightSpacer: {
+  webViewHeaderSpacer: {
     width: 36,
-  },
-  googleChooserScroll: {
-    flexGrow: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  googleSubheader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EAED',
-  },
-  googleSubheaderLogo: {
-    width: 18,
-    height: 18,
-  },
-  googleSubheaderText: {
-    fontSize: 14,
-    color: '#5F6368',
-    fontWeight: '500',
-  },
-  googleChooserBody: {
-    paddingHorizontal: 24,
-    paddingTop: 28,
-    paddingBottom: 36,
-    maxWidth: 440,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  googleAppBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1A73E8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  googleAppBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  googleChooserTitle: {
-    fontSize: 24,
-    lineHeight: 32,
-    color: '#202124',
-    fontWeight: '400',
-  },
-  googleChooserSubtitle: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: '#202124',
-    marginTop: 4,
-    marginBottom: 24,
-  },
-  googleChooserAppLink: {
-    color: '#1A73E8',
-    fontWeight: '500',
-  },
-  googleErrorBox: {
-    backgroundColor: '#FCE8E6',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  googleErrorBoxText: {
-    color: '#C5221F',
-    fontSize: 13,
-  },
-  googleAccountsContainer: {
-    borderTopWidth: 1,
-    borderTopColor: '#E8EAED',
-  },
-  googleAccountBlock: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EAED',
-  },
-  googleAccountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    gap: 14,
-  },
-  googleAccountRowPressed: {
-    backgroundColor: '#F1F3F4',
-  },
-  googleAvatarCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleAvatarLetter: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  googleAccountTextCol: {
-    flex: 1,
-  },
-  googleAccountName: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#3C4043',
-    fontWeight: '500',
-  },
-  googleAccountEmail: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: '#5F6368',
-  },
-  googleInlinePasswordBox: {
-    paddingBottom: 14,
-    paddingHorizontal: 4,
-    gap: 10,
-  },
-  googleInlinePasswordInput: {
-    height: 44,
-    borderWidth: 1,
-    borderColor: '#DADCE0',
-    borderRadius: 4,
-    paddingHorizontal: 12,
-    fontSize: 14,
-    color: '#202124',
-    backgroundColor: '#FFFFFF',
-  },
-  googleNextButton: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#1A73E8',
-    paddingHorizontal: 20,
-    paddingVertical: 9,
-    borderRadius: 4,
-  },
-  googleNextButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  googleUseAnotherRow: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EAED',
-  },
-  googleUseAnotherIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#DADCE0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleUseAnotherIconText: {
-    fontSize: 18,
-    color: '#5F6368',
-    fontWeight: '500',
-  },
-  googleUseAnotherLabel: {
-    fontSize: 14,
-    color: '#3C4043',
-    fontWeight: '500',
-  },
-  googlePrivacyText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#5F6368',
-    marginTop: 28,
-  },
-  webViewContainer: {
-    flex: 1,
   },
   webViewLoader: {
     paddingVertical: 6,
