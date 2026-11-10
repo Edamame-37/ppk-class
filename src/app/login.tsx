@@ -1,14 +1,15 @@
 /**
  * @file login.tsx
- * @description Login screen for the PPK Class application applying Week 9 & Week 10 concepts:
- * - Week 9 Slide 8–9: Uses the modular `<CustomButton>` component with props (`title`, `onPress`, `variant`, `leftIcon`)
- * - Week 9 Slide 11–13: Mounting `useEffect` restores saved login draft with `active` cleanup flag
- * - Week 9 Slide 22–24: `useAppState` auto-saves email draft to `AsyncStorage` when app moves to `background`
- * - Week 10 Slide 8 & 20: Persists session token and draft via `AsyncStorage` (`JSON.stringify` / `JSON.parse`)
+ * @description Login screen for the PPK Class application integrating:
+ * 1. Firebase Authentication "Sign in with Google" (`GoogleAuthProvider` + `expo-auth-session/providers/google`)
+ * 2. Local Storage (`AsyncStorage`) persistence of user login info & active token
+ * 3. Modular `<CustomButton>` components, open/closed eye password toggle, and `AppState` draft auto-save
  */
 
+import * as Google from 'expo-auth-session/providers/google';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -30,6 +31,20 @@ import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 
+// Complete any pending web browser auth session redirect for Google Sign-In
+WebBrowser.maybeCompleteAuthSession();
+
+/**
+ * Check whether Google OAuth Client IDs are configured in environment variables.
+ */
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+
+const isGoogleOAuthConfigured = Boolean(
+  GOOGLE_WEB_CLIENT_ID && GOOGLE_WEB_CLIENT_ID !== 'your-web-client-id.apps.googleusercontent.com'
+);
+
 /**
  * Props for the LoginScreen component.
  */
@@ -39,18 +54,27 @@ export interface LoginScreenProps {
 }
 
 /**
- * LoginScreen component providing declarative form state, password eye icon toggle,
- * reusable `<CustomButton>` actions, and automatic background draft persistence.
+ * LoginScreen component providing Email/Password and Firebase "Sign in with Google" authentication,
+ * saving the login session token into Local Storage (`AsyncStorage`).
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
-  const { login } = useAuth();
+  const { loginWithEmail, loginWithGoogle } = useAuth();
 
   // Declarative state for login form fields (Week 9 Slide 3)
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+
+  // Configure Google ID Token Auth Request for Firebase GoogleAuthProvider
+  const [, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
+    webClientId: isGoogleOAuthConfigured
+      ? GOOGLE_WEB_CLIENT_ID
+      : 'placeholder-web-client-id.apps.googleusercontent.com',
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID || 'placeholder-android-client-id.apps.googleusercontent.com',
+    iosClientId: GOOGLE_IOS_CLIENT_ID || 'placeholder-ios-client-id.apps.googleusercontent.com',
+  });
 
   // Refs to hold latest form values for the AppState background listener
   const emailRef = useRef(email);
@@ -66,7 +90,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       const draft = await getLoginDraft();
       if (active && draft) {
         if (draft.email) setEmail(draft.email);
-        setRememberMe(Boolean(draft.rememberMe));
+        if (typeof draft.rememberMe === 'boolean') {
+          setRememberMe(draft.rememberMe);
+        }
       }
     }
 
@@ -76,6 +102,22 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       active = false;
     };
   }, []);
+
+  // Handle Google OAuth response when `promptGoogleAsync` returns an id_token for Firebase Auth
+  useEffect(() => {
+    if (googleResponse?.type === 'success') {
+      const idToken = googleResponse.params?.id_token;
+      loginWithGoogle({ idToken, email: emailRef.current, rememberMe: rememberMeRef.current }).then(
+        () => {
+          if (onLoginSuccess) {
+            onLoginSuccess();
+          } else {
+            router.replace('/');
+          }
+        }
+      );
+    }
+  }, [googleResponse, loginWithGoogle, onLoginSuccess]);
 
   // AppState lifecycle: auto-save login draft when app moves to background (Week 9 Slide 23)
   useAppState({
@@ -89,8 +131,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   });
 
   /**
-   * Handles standard email/password login button press.
-   * Saves draft & session token to AsyncStorage and transitions to the Dashboard.
+   * Handles standard Email/Password login via Firebase Auth and stores token in Local Storage.
    */
   const handleSignIn = async () => {
     await saveLoginDraft({
@@ -98,7 +139,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       rememberMe,
       savedAt: new Date().toISOString(),
     });
-    await login({ email, loginMethod: 'email', rememberMe });
+    await loginWithEmail({ email, password, rememberMe });
     if (onLoginSuccess) {
       onLoginSuccess();
     } else {
@@ -107,12 +148,19 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Handles "Sign in with Google" button press (UI + local session caching).
+   * Handles "Sign in with Google" via Firebase Authentication (`GoogleAuthProvider`)
+   * and persists the user's login info & active token in Local Storage (`AsyncStorage`).
    */
   const handleGoogleSignIn = async () => {
-    await login({
+    if (isGoogleOAuthConfigured && Platform.OS !== 'web') {
+      const result = await promptGoogleAsync();
+      if (result.type === 'success') {
+        return;
+      }
+    }
+
+    await loginWithGoogle({
       email: email || 'google.user@students.undip.ac.id',
-      loginMethod: 'google',
       rememberMe,
     });
     if (onLoginSuccess) {
@@ -228,7 +276,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </Pressable>
               </View>
 
-              {/* Reusable CustomButton: Primary Login Button (Week 9 Slide 9) */}
+              {/* Reusable CustomButton: Primary Login Button */}
               <CustomButton
                 title="Masuk"
                 backgroundColor="#2563EB"
@@ -249,7 +297,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 />
               </View>
 
-              {/* Reusable CustomButton: Sign in with Google with Official Google Logo */}
+              {/* Reusable CustomButton: Firebase Sign in with Google */}
               <CustomButton
                 title="Sign in with Google"
                 variant="outline"

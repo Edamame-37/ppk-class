@@ -1,10 +1,9 @@
 /**
  * @file storage.ts
  * @description Local Key-Value Persistent Storage module applying Week 10 concepts:
- * - Persistent vs Non-Persistent storage (survives app kill & device restart)
- * - AsyncStorage serialization (`JSON.stringify` on write, `JSON.parse` on read)
- * - Synchronous in-memory cache layer (MMKV-inspired instant read access after hydration)
- * - Auth session token caching (`APP OPEN -> READ TOKEN -> HOME instan / LOGIN`)
+ * - Stores login session information (`uid`, `email`, `displayName`, `token`, `loginMethod`) in `AsyncStorage`
+ * - Enables instant Login page bypass when an active token exists in Local Storage (Week 10 Slide 20)
+ * - Caches the database student list (`students`) locally using `JSON.stringify` / `JSON.parse`
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,13 +20,22 @@ export const STORAGE_KEYS = {
 } as const;
 
 /**
- * Represents a persisted user authentication session (Week 10 Slide 8 & 20).
+ * Represents a persisted user authentication session stored in Local Storage (Week 10 Slide 8 & 20).
  */
 export interface UserSession {
+  /** Unique user identifier from Firebase Auth or local session */
+  uid: string;
+  /** User email address */
   email: string;
+  /** Optional display name from Google Sign-In or profile */
+  displayName?: string;
+  /** Active authentication token used to bypass the Login page on subsequent app opens */
   token: string;
+  /** Authentication provider method (`'email'` | `'google'`) */
   loginMethod: 'email' | 'google';
+  /** Whether the user checked Remember Me */
   rememberMe: boolean;
+  /** ISO timestamp when the user signed in */
   loggedInAt: string;
 }
 
@@ -41,13 +49,12 @@ export interface LoginDraft {
 }
 
 /**
- * In-memory synchronous cache (mirrors MMKV synchronous `getString`/`set` semantics
- * while delegating disk persistence to Expo Go's bundled AsyncStorage).
+ * In-memory synchronous cache layer paired with AsyncStorage disk persistence.
  */
 const memoryCache = new Map<string, string>();
 
 /**
- * Saves the authenticated user session to persistent storage (`JSON.stringify`).
+ * Saves the authenticated user's login information and token to Local Storage (`JSON.stringify`).
  *
  * @param session - The user session object to persist
  */
@@ -62,8 +69,8 @@ export async function saveUserSession(session: UserSession): Promise<void> {
 }
 
 /**
- * Reads the persisted user session from storage (`JSON.parse`).
- * Implements the `READ TOKEN` step in the Week 10 Slide 20 Auth-Sync diagram.
+ * Reads the persisted user login session and active token from Local Storage (`JSON.parse`).
+ * Used on app launch to bypass the Login screen if an active token is present.
  *
  * @returns The parsed `UserSession` if present, or `null` otherwise
  */
@@ -86,7 +93,7 @@ export async function getUserSession(): Promise<UserSession | null> {
 }
 
 /**
- * Clears the persisted user session on logout.
+ * Clears the persisted user session and token from Local Storage on logout.
  */
 export async function clearUserSession(): Promise<void> {
   try {
@@ -98,8 +105,7 @@ export async function clearUserSession(): Promise<void> {
 }
 
 /**
- * Saves the student list to persistent storage (`JSON.stringify`).
- * Converts the non-persistent RAM array (Week 10 Slide 5) into persistent disk data (Week 10 Slide 8).
+ * Saves the student list to persistent Local Storage (`JSON.stringify`).
  *
  * @param students - Array of Student records to persist
  */
@@ -114,8 +120,8 @@ export async function saveStudentsData(students: readonly Student[]): Promise<vo
 }
 
 /**
- * Loads the persisted student list from storage (`JSON.parse`).
- * Seeds storage with the 5 initial hardcoded students (`STUDENTS_DATA`) if none exist yet.
+ * Loads the persisted student list from Local Storage (`JSON.parse`).
+ * Seeds storage with the 5 initial students (`STUDENTS_DATA`) if none exist yet.
  *
  * @returns Array of Student records
  */
@@ -129,7 +135,6 @@ export async function getStudentsData(): Promise<Student[]> {
         return parsed;
       }
     }
-    // Seed initial 5 hardcoded students (Asep, Mamat, Yanto, Udin, Rahmat) into persistent storage
     const initial = [...STUDENTS_DATA];
     await saveStudentsData(initial);
     return initial;
@@ -140,7 +145,7 @@ export async function getStudentsData(): Promise<Student[]> {
 }
 
 /**
- * Resets the persisted student list back to the 5 initial hardcoded students.
+ * Resets the persisted student list back to the 5 initial students.
  *
  * @returns The default 5 Student records
  */

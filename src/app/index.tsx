@@ -1,18 +1,17 @@
 /**
  * @file index.tsx
- * @description Main entry route (`/`) & Student Dashboard screen for the PPK Class application.
- * Applies concepts from Week 9 & Week 10:
- * - Week 9 Slide 8–9: Modular `<CustomButton>` and `<StudentCard>` components
- * - Week 9 Slide 10: Responsive layout adaptation (`useWindowDimensions`)
- * - Week 9 Slide 11–19: Component Lifecycle (`useEffect` on mount with `active` cleanup flag,
- *   and `useMemo` for derived calculations instead of `useEffect`)
- * - Week 9 Slide 22–24: `useAppState` listener to refresh data when returning to foreground
- * - Week 10 Slide 4–8 & 19–20: Persistent Student Data in `AsyncStorage` (`getStudentsData`,
- *   `saveStudentsData`, `resetStudentsData`) + Auth Session Caching (`logout`)
+ * @description Home / Student Dashboard screen (`/`) for the PPK Class application.
+ * Implements the 5 Firebase + React Native requirements:
+ * 1. Authenticates with Google on Firebase Auth (`login.tsx` + `auth-context.tsx`)
+ * 2. Stores login session & token in Local Storage (`AsyncStorage`)
+ * 3. Bypasses the Login page automatically whenever an active token exists in Local Storage
+ * 4. Allows inputting new student data (`nama`, `nim`, `programStudi`) into the `students` database table/collection
+ * 5. Displays the live list of students stored in the database via `subscribeToStudents`
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -32,20 +31,24 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
-import { getStudentsData, resetStudentsData, saveStudentsData } from '@/utils/storage';
+import {
+  addStudentToDatabase,
+  resetStudentsInDatabase,
+  subscribeToStudents,
+} from '@/services/student-service';
+import { getStudentsData } from '@/utils/storage';
 
 /**
- * DashboardScreen component that renders the persistent list of students
- * (defaulting to the 5 hardcoded students: Asep, Mamat, Yanto, Udin, Rahmat)
- * after the user has logged in from the initial Login screen.
+ * DashboardScreen component displaying the list of students from the database
+ * and providing a form to input new student records into the `students` table/collection.
  */
 export default function DashboardScreen() {
   const theme = useTheme();
-  const { isLoggedIn, setIsLoggedIn, logout } = useAuth();
+  const { isLoggedIn, isHydrating, session, setIsLoggedIn, logout } = useAuth();
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
 
-  // Persistent student list state (initialized with the 5 hardcoded students and synced with AsyncStorage)
+  // Database student list state (populated via `subscribeToStudents` realtime database listener)
   const [students, setStudents] = useState<Student[]>([...STUDENTS_DATA]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -53,33 +56,25 @@ export default function DashboardScreen() {
   const [newNim, setNewNim] = useState('');
   const [newProdi, setNewProdi] = useState('Informatika');
 
-  // Mounting lifecycle: load persisted student records from AsyncStorage (Week 9 Slide 13 & Week 10 Slide 8)
+  // Subscribe to the `students` database collection/table on mount and cleanup on unmount (Week 10 Slide 19)
   useEffect(() => {
-    let active = true;
+    const unsubscribe = subscribeToStudents((dbStudents) => {
+      setStudents(dbStudents);
+    });
 
-    async function loadPersistedStudents() {
-      const stored = await getStudentsData();
-      if (active) {
-        setStudents(stored);
-      }
-    }
-
-    loadPersistedStudents();
-
-    // Cleanup function to prevent state updates after unmount (Week 9 Slide 13 & 19)
     return () => {
-      active = false;
+      unsubscribe();
     };
   }, []);
 
-  // AppState lifecycle: reload persisted students when app returns from background to active foreground (Week 9 Slide 23)
+  // AppState lifecycle: refresh database cache when app returns from background to active foreground (Week 9 Slide 23)
   const appState = useAppState({
     onForeground: () => {
       getStudentsData().then((stored) => setStudents(stored));
     },
   });
 
-  // Derived state calculated during render using useMemo, NOT useEffect (Week 9 Slide 16 & 17 Decision Guide)
+  // Derived state calculated during render using useMemo (Week 9 Slide 17 Decision Guide)
   const totalProdi = useMemo(
     () => new Set(students.map((item) => item.programStudi)).size,
     [students]
@@ -97,7 +92,7 @@ export default function DashboardScreen() {
   }, [students, searchQuery]);
 
   /**
-   * Adds a new student and persists the updated array to AsyncStorage (Week 10 Slide 5 vs Slide 8).
+   * Inserts a new student record (`nama`, `nim`, `programStudi`) into the `students` database collection.
    */
   const handleAddStudent = useCallback(async () => {
     const trimmedName = newNama.trim();
@@ -109,32 +104,35 @@ export default function DashboardScreen() {
         Math.floor(100 + Math.random() * 900)
       )}`;
 
-    const newStudent: Student = {
-      id: `mhs-${Date.now()}`,
+    await addStudentToDatabase({
       nama: trimmedName,
       nim: generatedNim,
       programStudi: newProdi.trim() || 'Informatika',
-    };
-
-    const updated = [...students, newStudent];
-    setStudents(updated);
-    await saveStudentsData(updated);
+    });
 
     setNewNama('');
     setNewNim('');
     setNewProdi('Informatika');
     setShowAddForm(false);
-  }, [newNama, newNim, newProdi, students]);
+  }, [newNama, newNim, newProdi]);
 
   /**
-   * Resets the student list in AsyncStorage back to the 5 initial students (Asep, Mamat, Yanto, Udin, Rahmat).
+   * Resets the `students` database table back to the 5 initial students (Asep, Mamat, Yanto, Udin, Rahmat).
    */
   const handleResetStudents = useCallback(async () => {
-    const initial = await resetStudentsData();
-    setStudents(initial);
+    await resetStudentsInDatabase();
   }, []);
 
-  // Render the Login page first before entering the Dashboard (footer is hidden while !isLoggedIn)
+  // While checking Local Storage for an active token on app launch, avoid flashing the Login screen
+  if (isHydrating) {
+    return (
+      <ThemedView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+      </ThemedView>
+    );
+  }
+
+  // If no active token is found in Local Storage, present the Login screen (without footer)
   if (!isLoggedIn) {
     return <LoginScreen onLoginSuccess={() => setIsLoggedIn(true)} />;
   }
@@ -156,12 +154,12 @@ export default function DashboardScreen() {
           renderItem={renderStudentItem}
           ListHeaderComponent={
             <View style={styles.headerContainer}>
-              {/* Top Bar: Dashboard Title, Subtitle & Logout Button */}
+              {/* Top Bar: Dashboard Title, Active User Info & Logout Button */}
               <View style={styles.topBar}>
                 <View style={styles.titleGroup}>
                   <ThemedText type="subtitle">Dashboard</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
-                    Daftar Mahasiswa
+                    Daftar Mahasiswa{session?.email ? ` • ${session.email}` : ''}
                   </ThemedText>
                 </View>
 
@@ -214,12 +212,12 @@ export default function DashboardScreen() {
                 </ThemedView>
               </View>
 
-              {/* Search Input & Action Buttons (Week 9 TextInput & CustomButton) */}
+              {/* Search Input & Button to Input New Student into Database */}
               <View style={styles.controlsRow}>
                 <TextInput
                   value={searchQuery}
                   onChangeText={setSearchQuery}
-                  placeholder="Cari nama atau NIM mahasiswa..."
+                  placeholder="Cari nama, NIM, atau prodi..."
                   placeholderTextColor={theme.textSecondary}
                   style={[
                     styles.searchInput,
@@ -238,16 +236,16 @@ export default function DashboardScreen() {
                 />
               </View>
 
-              {/* Collapsible Form to Add Persistent Student Data (Week 10 Persistent Storage) */}
+              {/* Form Input Data Mahasiswa ke Database (`students` collection) */}
               {showAddForm && (
                 <ThemedView
                   type="backgroundElement"
                   style={[styles.addFormCard, { borderColor: theme.backgroundSelected }]}>
-                  <ThemedText type="smallBold">Tambah Mahasiswa (Tersimpan Persisten)</ThemedText>
+                  <ThemedText type="smallBold">Input Data Mahasiswa ke Database</ThemedText>
                   <TextInput
                     value={newNama}
                     onChangeText={setNewNama}
-                    placeholder="Nama Mahasiswa"
+                    placeholder="Nama Mahasiswa (contoh: Budi)"
                     placeholderTextColor={theme.textSecondary}
                     style={[
                       styles.formInput,
@@ -273,9 +271,23 @@ export default function DashboardScreen() {
                       },
                     ]}
                   />
+                  <TextInput
+                    value={newProdi}
+                    onChangeText={setNewProdi}
+                    placeholder="Program Studi (contoh: Informatika)"
+                    placeholderTextColor={theme.textSecondary}
+                    style={[
+                      styles.formInput,
+                      {
+                        color: theme.text,
+                        backgroundColor: theme.background,
+                        borderColor: theme.backgroundSelected,
+                      },
+                    ]}
+                  />
                   <View style={styles.formButtonRow}>
                     <CustomButton
-                      title="Simpan Mahasiswa"
+                      title="Simpan ke Database"
                       onPress={handleAddStudent}
                       style={styles.flexButton}
                       labelStyle={styles.smallBtnLabel}
@@ -318,6 +330,11 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   container: {
     flex: 1,
     flexDirection: 'row',
