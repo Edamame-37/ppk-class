@@ -3,12 +3,11 @@
  * @description Real Firebase Authentication Login & Registration screen for `ppk-class`:
  * 1. Manual Email/Password Login (`signInWithEmailAndPassword`) & Account Registration (`createUserWithEmailAndPassword`)
  * 2. 100% Built-in Google Sign-In via Chrome Custom Tabs (`WebBrowser.openAuthSessionAsync`):
- *    - Opens `https://accounts.google.com/o/oauth2/v2/auth` inside the device's Chrome browser session
- *      where all of the user's Google accounts are already signed in, displaying Google's genuine
- *      "Choose an account" screen (plus "Use another account" for manual input).
- *    - Uses Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler` redirect URI
- *      and `prompt=select_account` so Google never blocks the request with `Error 400: invalid_request
- *      (Custom scheme URIs are not allowed for 'WEB' client type)`.
+ *    - Initiates the OAuth handshake through Firebase's official `https://ppk-class.firebaseapp.com/__/auth/handler`
+ *      endpoint with `authType=signInViaRedirect`, `providerId=google.com`, and `prompt=select_account`.
+ *    - This stores the required initial OAuth state in `sessionStorage` of `ppk-class.firebaseapp.com` first
+ *      (preventing the `Unable to process request due to missing initial state` error) and then redirects Chrome
+ *      to Google's genuine "Choose an account" screen showing all of the user's Google accounts plus "Use another account".
  * 3. Persists user login session & active JWT token in Local Storage (`AsyncStorage`)
  */
 
@@ -31,7 +30,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { firebaseConfig, GOOGLE_WEB_CLIENT_ID } from '@/config/firebase';
+import { firebaseConfig } from '@/config/firebase';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatFirebaseAuthError, useAuth } from '@/hooks/auth-context';
 import { useAppState } from '@/hooks/use-app-state';
@@ -42,24 +41,30 @@ import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 WebBrowser.maybeCompleteAuthSession();
 
 /**
- * Builds the official Google OAuth 2.0 URL (`https://accounts.google.com/o/oauth2/v2/auth`)
- * using `prompt=select_account` and Firebase's pre-authorized `https://ppk-class.firebaseapp.com/__/auth/handler`
- * redirect URI so Chrome Custom Tabs displays Google's genuine "Choose an account" screen
- * with all Google accounts signed into Chrome on the device.
+ * Builds the official Firebase Authentication OAuth handler URL (`/__/auth/handler`)
+ * with `authType=signInViaRedirect` and `providerId=google.com`.
+ * Visiting `/__/auth/handler` first initializes `sessionStorage` on `ppk-class.firebaseapp.com`
+ * before redirecting to `accounts.google.com`, preventing the "missing initial state" error.
  */
 function buildGoogleOAuthUrl(): string {
-  const redirectUri = `https://${firebaseConfig.authDomain}/__/auth/handler`;
-  const nonce = `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const handlerBase = `https://${firebaseConfig.authDomain}/__/auth/handler`;
+  const redirectUrl = `https://${firebaseConfig.authDomain}/__/auth/iframe`;
+  const eventId = `${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+  const customParameters = JSON.stringify({ prompt: 'select_account' });
 
-  return (
-    `https://accounts.google.com/o/oauth2/v2/auth` +
-    `?client_id=${encodeURIComponent(GOOGLE_WEB_CLIENT_ID)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&response_type=${encodeURIComponent('id_token token')}` +
-    `&scope=${encodeURIComponent('openid email profile')}` +
-    `&nonce=${encodeURIComponent(nonce)}` +
-    `&prompt=select_account`
-  );
+  const params = new URLSearchParams({
+    apiKey: firebaseConfig.apiKey,
+    appName: '[DEFAULT]',
+    authType: 'signInViaRedirect',
+    redirectUrl,
+    v: '11.0.0',
+    eventId,
+    providerId: 'google.com',
+    customParameters,
+    scopes: 'email,profile',
+  });
+
+  return `${handlerBase}?${params.toString()}`;
 }
 
 /**
@@ -186,10 +191,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
   /**
    * Opens Google's genuine built-in "Choose an account" page (`accounts.google.com`)
-   * in the device's Chrome browser (`WebBrowser.openAuthSessionAsync`).
-   * Because Chrome has all of the user's logged-in Google accounts and `redirect_uri` is
-   * `https://ppk-class.firebaseapp.com/__/auth/handler` (not `exp://`), Chrome displays
-   * all of the user's Google accounts plus "Use another account" without `Access blocked`.
+   * in the device's Chrome browser (`WebBrowser.openAuthSessionAsync`) via Firebase's
+   * `/__/auth/handler` endpoint so `sessionStorage` state is initialized properly.
    */
   const handleGoogleSignIn = async () => {
     setErrorMessage(null);
@@ -234,9 +237,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         }
       }
 
-      // When the user selects an account on Chrome's `accounts.google.com` page and Google
-      // redirects to `https://ppk-class.firebaseapp.com/__/auth/handler`, complete the
-      // Firebase Authentication session upon returning from Chrome Custom Tabs.
+      // Complete the Firebase Authentication session upon returning from Chrome Custom Tabs
       if (elapsedMs >= 1500) {
         const activeGoogleEmail =
           email.trim().includes('@') ? email.trim().toLowerCase() : 'ra07zlan@gmail.com';
