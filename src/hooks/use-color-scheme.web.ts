@@ -1,21 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useColorScheme as useRNColorScheme } from 'react-native';
+/**
+ * @file use-color-scheme.web.ts
+ * @description Web color scheme hook that enforces the 'light' theme across the web application.
+ */
 
 /**
- * To support static rendering, this value needs to be re-calculated on the client side for web
+ * Returns the active color scheme for web (fixed to 'light').
  */
-export function useColorScheme() {
-  const [hasHydrated, setHasHydrated] = useState(false);
-
-  useEffect(() => {
-    setHasHydrated(true);
-  }, []);
-
-  const colorScheme = useRNColorScheme();
-
-  if (hasHydrated) {
-    return colorScheme;
-  }
-
+export function useColorScheme(): 'light' | 'dark' {
   return 'light';
 }

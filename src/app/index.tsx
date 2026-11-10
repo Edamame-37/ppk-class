@@ -1,14 +1,16 @@
 /**
  * @file index.tsx
- * @description Student Dashboard screen (main route `/`) for the PPK Class application.
- * Displays a summary header and a list of 5 hardcoded students with their Nama, NIM,
- * and Program Studi, along with a quick navigation button to the Login page.
+ * @description Main entry route (`/`) for the PPK Class application.
+ * Presents the Login screen first when the user opens the application, and transitions
+ * to the Student Dashboard screen (displaying 5 hardcoded students with Nama, NIM, and Program Studi)
+ * once the user signs in.
  */
 
-import { Link } from 'expo-router';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { FlatList, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import LoginScreen from '@/app/login';
 import { StudentCard } from '@/components/student-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -18,20 +20,28 @@ import { useTheme } from '@/hooks/use-theme';
 
 /**
  * DashboardScreen component that renders the hardcoded list of 5 students
- * (Nama, NIM, Program Studi) and summary metrics.
+ * (Nama, NIM, Program Studi) after the user has logged in from the initial Login screen.
  */
 export default function DashboardScreen() {
   const theme = useTheme();
 
+  // Start with isLoggedIn = false so the user is immediately presented with the Login page on app launch
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
   // Compute unique Program Studi count from the hardcoded dataset
   const totalProdi = new Set(STUDENTS_DATA.map((item) => item.programStudi)).size;
 
+  // Render the Login page first before entering the Dashboard
+  if (!isLoggedIn) {
+    return <LoginScreen onLoginSuccess={() => setIsLoggedIn(true)} />;
+  }
+
   /**
-   * Renders the top header section above the student FlatList.
+   * Renders the top header section above the student FlatList (without the "Halaman Login" text/button).
    */
   const renderListHeader = () => (
     <View style={styles.headerContainer}>
-      {/* Top Bar: Title & Login/Logout Navigation Button */}
+      {/* Top Bar: Dashboard Title & Subtitle */}
       <View style={styles.topBar}>
         <View style={styles.titleGroup}>
           <ThemedText type="subtitle">Dashboard Mahasiswa</ThemedText>
@@ -39,19 +49,6 @@ export default function DashboardScreen() {
             Daftar Mahasiswa Aktif PPK Class
           </ThemedText>
         </View>
-
-        <Link href="/login" asChild>
-          <Pressable
-            style={({ pressed }) => [
-              styles.loginNavButton,
-              { borderColor: theme.backgroundSelected, backgroundColor: theme.backgroundElement },
-              pressed && styles.pressed,
-            ]}>
-            <ThemedText type="smallBold" style={styles.loginNavText}>
-              Halaman Login
-            </ThemedText>
-          </Pressable>
-        </Link>
       </View>
 
       {/* Summary Statistics Row */}
@@ -142,18 +139,6 @@ const styles = StyleSheet.create({
   titleGroup: {
     gap: Spacing.half,
     flexShrink: 1,
-  },
-  loginNavButton: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Spacing.two,
-    borderWidth: 1,
-  },
-  loginNavText: {
-    color: '#2563EB',
-  },
-  pressed: {
-    opacity: 0.75,
   },
   statsRow: {
     flexDirection: 'row',

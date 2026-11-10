@@ -1,19 +1,18 @@
 /**
  * @file app-tabs.tsx
  * @description Native bottom tab navigator component for Expo SDK 58.
- * Uses `expo-router/native-tabs` to render native bottom tabs for Dashboard and Login.
+ * Renders only the Dashboard tab in the footer using the Light theme palette.
  */
 import { NativeTabs } from 'expo-router/native-tabs';
-import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
 
 /**
  * Primary tab navigation layout for native platforms (Android & iOS).
+ * Displays only the Dashboard item in the bottom footer bar.
  */
 export default function AppTabs() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const colors = Colors.light;
 
   return (
     <NativeTabs
@@ -24,14 +23,6 @@ export default function AppTabs() {
         <NativeTabs.Trigger.Label>Dashboard</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           src={require('@/assets/images/tabIcons/home.png')}
-          renderingMode="template"
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="login">
-        <NativeTabs.Trigger.Label>Login</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          src={require('@/assets/images/tabIcons/explore.png')}
           renderingMode="template"
         />
       </NativeTabs.Trigger>

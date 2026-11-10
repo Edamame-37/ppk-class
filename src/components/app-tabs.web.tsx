@@ -1,6 +1,6 @@
 /**
  * @file app-tabs.web.tsx
- * @description Web navigation bar component configuring tabs for Dashboard (`/`) and Login (`/login`).
+ * @description Web navigation bar component displaying only the Dashboard tab in the Light theme.
  */
 import {
   TabList,
@@ -11,7 +11,7 @@ import {
   TabTriggerSlotProps,
 } from 'expo-router/ui';
 import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, useColorScheme, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 
@@ -20,7 +20,7 @@ import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
 /**
- * Main web tabs layout rendering the Dashboard and Login navigation triggers.
+ * Main web tabs layout rendering only the Dashboard navigation trigger.
  */
 export default function AppTabs() {
   return (
@@ -30,9 +30,6 @@ export default function AppTabs() {
         <CustomTabList>
           <TabTrigger name="dashboard" href="/" asChild>
             <TabButton>Dashboard</TabButton>
-          </TabTrigger>
-          <TabTrigger name="login" href="/login" asChild>
-            <TabButton>Login</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>
@@ -59,15 +56,17 @@ export function TabButton({ children, isFocused, ref: _ref, ...props }: TabTrigg
   );
 }
 
+/**
+ * Custom tab bar container for web navigation using the Light theme.
+ */
 export function CustomTabList(props: TabListProps) {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const colors = Colors.light;
 
   return (
     <View {...props} style={styles.tabListContainer}>
       <ThemedView type="backgroundElement" style={styles.innerContainer}>
         <ThemedText type="smallBold" style={styles.brandText}>
-          Expo Starter
+          PPK Class
         </ThemedText>
 
         {props.children}
