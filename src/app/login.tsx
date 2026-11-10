@@ -1,15 +1,15 @@
 /**
  * @file login.tsx
- * @description Login screen for the PPK Class application.
- * Displays the "Selamat Datang Kembali" heading (without PPK badge or subtitle),
- * an Email input field, a Password input field with open/closed eye icon toggle,
- * Remember Me checkbox, Forgot Password link, primary Sign In button, and a UI-only
- * "Sign in with Google" button featuring the official 4-color Google logo PNG asset.
+ * @description Login screen for the PPK Class application applying Week 9 & Week 10 concepts:
+ * - Week 9 Slide 8–9: Uses the modular `<CustomButton>` component with props (`title`, `onPress`, `variant`, `leftIcon`)
+ * - Week 9 Slide 11–13: Mounting `useEffect` restores saved login draft with `active` cleanup flag
+ * - Week 9 Slide 22–24: `useAppState` auto-saves email draft to `AsyncStorage` when app moves to `background`
+ * - Week 10 Slide 8 & 20: Persists session token and draft via `AsyncStorage` (`JSON.stringify` / `JSON.parse`)
  */
 
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -21,10 +21,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CustomButton } from '@/components/custom-button';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/auth-context';
+import { useAppState } from '@/hooks/use-app-state';
 import { useTheme } from '@/hooks/use-theme';
+import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 
 /**
  * Props for the LoginScreen component.
@@ -35,23 +39,66 @@ export interface LoginScreenProps {
 }
 
 /**
- * LoginScreen component providing standard authentication UI controls,
- * an open/closed eye password visibility toggle icon, and a "Sign in with Google" button.
+ * LoginScreen component providing declarative form state, password eye icon toggle,
+ * reusable `<CustomButton>` actions, and automatic background draft persistence.
  */
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const theme = useTheme();
+  const { login } = useAuth();
 
-  // Local form state for standard login fields (UI-only, not connected to backend yet)
+  // Declarative state for login form fields (Week 9 Slide 3)
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
 
+  // Refs to hold latest form values for the AppState background listener
+  const emailRef = useRef(email);
+  emailRef.current = email;
+  const rememberMeRef = useRef(rememberMe);
+  rememberMeRef.current = rememberMe;
+
+  // Mounting lifecycle: restore any previously saved email draft from AsyncStorage (Week 9 Slide 13)
+  useEffect(() => {
+    let active = true;
+
+    async function loadSavedDraft() {
+      const draft = await getLoginDraft();
+      if (active && draft) {
+        if (draft.email) setEmail(draft.email);
+        setRememberMe(Boolean(draft.rememberMe));
+      }
+    }
+
+    loadSavedDraft();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // AppState lifecycle: auto-save login draft when app moves to background (Week 9 Slide 23)
+  useAppState({
+    onBackground: () => {
+      saveLoginDraft({
+        email: emailRef.current,
+        rememberMe: rememberMeRef.current,
+        savedAt: new Date().toISOString(),
+      });
+    },
+  });
+
   /**
-   * Handles standard login button press.
-   * Transitions to the Dashboard screen without server-side validation.
+   * Handles standard email/password login button press.
+   * Saves draft & session token to AsyncStorage and transitions to the Dashboard.
    */
-  const handleSignIn = () => {
+  const handleSignIn = async () => {
+    await saveLoginDraft({
+      email,
+      rememberMe,
+      savedAt: new Date().toISOString(),
+    });
+    await login({ email, loginMethod: 'email', rememberMe });
     if (onLoginSuccess) {
       onLoginSuccess();
     } else {
@@ -60,10 +107,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   /**
-   * Handles "Sign in with Google" button press.
-   * Prepared as a UI button only per requirements (server-side OAuth not connected yet).
+   * Handles "Sign in with Google" button press (UI + local session caching).
    */
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = async () => {
+    await login({
+      email: email || 'google.user@students.undip.ac.id',
+      loginMethod: 'google',
+      rememberMe,
+    });
     if (onLoginSuccess) {
       onLoginSuccess();
     } else {
@@ -177,17 +228,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </Pressable>
               </View>
 
-              {/* Primary Login Button */}
-              <Pressable
+              {/* Reusable CustomButton: Primary Login Button (Week 9 Slide 9) */}
+              <CustomButton
+                title="Masuk"
+                backgroundColor="#2563EB"
                 onPress={handleSignIn}
-                style={({ pressed }) => [
-                  styles.primaryButton,
-                  pressed && styles.buttonPressed,
-                ]}>
-                <ThemedText type="smallBold" style={styles.primaryButtonText}>
-                  Masuk
-                </ThemedText>
-              </Pressable>
+                style={styles.primaryButtonSpacing}
+              />
 
               {/* Divider */}
               <View style={styles.dividerRow}>
@@ -202,24 +249,19 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 />
               </View>
 
-              {/* Sign in with Google Button with Official Google Logo PNG Asset */}
-              <Pressable
+              {/* Reusable CustomButton: Sign in with Google with Official Google Logo */}
+              <CustomButton
+                title="Sign in with Google"
+                variant="outline"
                 onPress={handleGoogleSignIn}
-                style={({ pressed }) => [
-                  styles.googleButton,
-                  {
-                    backgroundColor: theme.background,
-                    borderColor: theme.backgroundSelected,
-                  },
-                  pressed && styles.buttonPressed,
-                ]}>
-                <Image
-                  source={require('@/assets/images/google-logo.png')}
-                  style={styles.googleLogo}
-                  contentFit="contain"
-                />
-                <ThemedText type="smallBold">Sign in with Google</ThemedText>
-              </Pressable>
+                leftIcon={
+                  <Image
+                    source={require('@/assets/images/google-logo.png')}
+                    style={styles.googleLogo}
+                    contentFit="contain"
+                  />
+                }
+              />
             </ThemedView>
 
             {/* Footer Registration Link */}
@@ -337,20 +379,8 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#2563EB',
   },
-  primaryButton: {
-    height: 48,
-    borderRadius: Spacing.two,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-    justifyContent: 'center',
+  primaryButtonSpacing: {
     marginTop: Spacing.one,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-  },
-  buttonPressed: {
-    opacity: 0.8,
   },
   dividerRow: {
     flexDirection: 'row',
@@ -361,15 +391,6 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-  },
-  googleButton: {
-    height: 48,
-    borderRadius: Spacing.two,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.two,
   },
   googleLogo: {
     width: 20,
