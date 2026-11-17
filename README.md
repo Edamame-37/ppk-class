@@ -1,85 +1,89 @@
-# ppk-class
+# PPK Class
 
-## Google Sign-In
+Aplikasi Expo SDK 58 untuk autentikasi pengguna dan pengelolaan data mahasiswa melalui Firebase Authentication dan Cloud Firestore. Aplikasi mendukung Android, iOS, dan web.
 
-Login Google Android/iOS menggunakan SDK native dan membutuhkan development build.
-Di Expo Go, gunakan login email/password. Web tetap menggunakan popup Firebase.
+## Persyaratan
 
-1. Aktifkan provider **Google** di Firebase Console > Authentication > Sign-in method.
-2. Isi `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` di `.env` dengan OAuth Client ID bertipe **Web application** dari proyek Firebase yang sama.
-3. Android: daftarkan package `com.ppkclass.app` (atau nilai `ANDROID_PACKAGE`) dan SHA-1 sertifikat build di Firebase/Google Cloud. Untuk EAS, ambil SHA-1 melalui `npx eas-cli@latest credentials -p android`. Setiap sertifikat development/store yang berbeda perlu didaftarkan. Android Client ID tidak dimasukkan ke kode.
-4. iOS: daftarkan bundle ID `com.ppkclass.app` (atau `IOS_BUNDLE_IDENTIFIER`) dan isi `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`. Config plugin menambahkan URL scheme otomatis.
-5. Pastikan konfigurasi environment yang sama tersedia saat build EAS, lalu buat dan instal development build Android:
+- Node.js dan npm
+- Proyek Firebase dengan Email/Password dan Google provider aktif
+- Development build untuk Google Sign-In native
 
-   ```bash
-   npx eas-cli@latest build --profile development --platform android
-   npx expo start --dev-client
-   ```
+## Konfigurasi
 
-   Untuk iOS, gunakan `--platform ios`. Build ulang setelah mengubah konfigurasi native/OAuth iOS.
+1. Salin `.env.example` menjadi `.env`.
+2. Isi seluruh variabel `EXPO_PUBLIC_FIREBASE_*` dari Firebase Console.
+3. Isi `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` untuk Google Sign-In.
+4. Untuk iOS, isi `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`.
+5. Pastikan `google-services.json` berasal dari aplikasi Android dengan package yang sama seperti `ANDROID_PACKAGE`.
 
-Untuk web, jalankan `npm run web` dan pastikan domain aplikasi ada di Firebase Authentication > Settings > Authorized domains.
+Firebase API key dan OAuth client ID merupakan identifier client, bukan secret server. Tetap gunakan environment berbeda untuk development, preview, dan production.
 
-Verifikasi login berhasil, pemilihan akun berbeda, pembatalan tanpa masuk dashboard, dan login email tetap berjalan. Untuk pemeriksaan kode:
+## Firebase
+
+Aktifkan provider Email/Password dan Google pada Firebase Authentication.
+
+Firestore harus memiliki koleksi `students`. Setiap dokumen menggunakan field berikut:
+
+```text
+nama: string
+nim: string
+programStudi: string
+createdAt: timestamp | string
+```
+
+Security Rules harus memberikan akses hanya kepada pengguna terautentikasi. Aplikasi menampilkan cache terakhir jika snapshot tidak tersedia, tetapi operasi tulis tidak dianggap berhasil jika Firestore menolaknya.
+
+## Account linking dan Super Admin
+
+Email `asephijau12@gmail.com` selalu memperoleh role lokal `super_admin`, baik saat login melalui Google maupun Email/Password. Email lain menggunakan role `user`. Pemisahan ini mengatur halaman dan kontrol yang terlihat di aplikasi; otorisasi database tetap mengikuti Firestore Rules yang aktif di Firebase Console.
+
+Untuk menggunakan Google dan Email/Password pada akun yang sama:
+
+1. Login dengan Google menggunakan `asephijau12@gmail.com`.
+2. Keluar, pilih **Daftar Sekarang**, lalu masukkan email yang sama dan password baru.
+3. Saat verifikasi Google muncul, pilih akun `asephijau12@gmail.com`.
+4. Firebase menghubungkan provider `google.com` dan `password` ke UID yang sama.
+
+Tidak diperlukan Cloud Function, deployment Firebase, atau Blaze plan. Logout dan login kembali setelah perubahan akun agar sesi lokal membaca role terbaru.
+
+Untuk mengaktifkan login manual Super Admin tanpa mengekspos password di bundle aplikasi:
+
+1. Login dengan Google sebagai `asephijau12@gmail.com`.
+2. Pada Dashboard Super Admin, tekan **Aktifkan Login Email & Password**.
+3. Masukkan dan konfirmasi password satu kali.
+4. Setelah provider Password terhubung, akun dapat login menggunakan Google atau form Email/Password dengan UID yang sama.
+
+`ADMIN_EMAIL_PASSWORD` tidak dibaca oleh aplikasi dan tidak boleh menggunakan prefix `EXPO_PUBLIC_`. Password hanya dikirim langsung ke Firebase Authentication ketika form setup disubmit.
+
+## Menjalankan aplikasi
+
+```bash
+npm install
+npx expo start
+```
+
+Google Sign-In native menggunakan `@react-native-google-signin/google-signin`, sehingga tidak tersedia di Expo Go. Buat development build setelah konfigurasi native atau OAuth berubah:
+
+```bash
+npx eas-cli@latest build --profile development --platform android
+npx expo start --dev-client
+```
+
+Gunakan `--platform ios` untuk iOS. Daftarkan package atau bundle identifier serta SHA-1 setiap sertifikat Android yang digunakan pada Firebase dan Google Cloud.
+
+## Pemeriksaan kualitas
 
 ```bash
 npx expo lint
 npx tsc --noEmit
+npm test
+npx expo-doctor
 ```
 
-Welcome to your Expo (React Native) app 👋
+## Build
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Profil build tersedia di `eas.json`:
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- `development`: development client internal berupa APK untuk Android
+- `preview`: distribusi internal
+- `production`: build store
