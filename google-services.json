@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "505993093899",
+    "project_id": "ppk-class",
+    "storage_bucket": "ppk-class.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:505993093899:android:3a60ca4915e4bf11be780e",
+        "android_client_info": {
+          "package_name": "com.ppkclass.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "505993093899-e1u89nospktsp0588salgujn1rv6ipjd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ppkclass.app",
+            "certificate_hash": "84daddd76ee20324acde04556cacff3b43936fe8"
+          }
+        },
+        {
+          "client_id": "505993093899-eb47b19ilpqn80hq5i3u4dvb5p9ob0q8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBiycPeF02RzD2gBlokVTmzCwEsIqnL87A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "505993093899-eb47b19ilpqn80hq5i3u4dvb5p9ob0q8.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
