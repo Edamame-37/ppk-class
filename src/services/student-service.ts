@@ -15,6 +15,7 @@ import {
   deleteDoc,
   doc,
   FirestoreError,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -42,10 +43,6 @@ export interface StudentInput {
   programStudi: string;
 }
 
-/** Active UI listeners to keep the screen updated in realtime */
-type StudentListener = (students: Student[]) => void;
-const activeListeners = new Set<StudentListener>();
-
 /** Tracks whether we have already attempted seeding Firestore in this session */
 let hasAttemptedFirestoreSeed = false;
 
@@ -65,11 +62,6 @@ function isPermissionDeniedError(error: unknown): boolean {
 /**
  * Broadcasts an updated student list to all active listeners and persists it to Local Storage.
  */
-async function notifyAndPersistStudents(students: Student[]): Promise<void> {
-  await saveStudentsData(students);
-  activeListeners.forEach((listener) => listener(students));
-}
-
 /**
  * Seeds the 5 initial student records (`Asep`, `Mamat`, `Yanto`, `Udin`, `Rahmat`)
  * into the Cloud Firestore `students` collection (`mhs-1` .. `mhs-5`).
@@ -79,6 +71,9 @@ export async function seedInitialStudentsToFirestore(): Promise<void> {
   hasAttemptedFirestoreSeed = true;
 
   try {
+    const existingSnapshot = await getDocs(collection(firestoreDb, STUDENTS_COLLECTION));
+    if (!existingSnapshot.empty) return;
+
     await Promise.all(
       INITIAL_STUDENTS_SEED.map((student, index) =>
         setDoc(doc(firestoreDb, STUDENTS_COLLECTION, student.id), {
@@ -106,19 +101,19 @@ export async function seedInitialStudentsToFirestore(): Promise<void> {
  * @returns Unsubscribe cleanup function to be called on component unmount
  */
 export function subscribeToStudents(
-  onUpdate: (students: Student[]) => void,
+  onUpdate: (students: Student[], source: 'remote' | 'cache') => void,
   onError?: (message: string) => void
 ): () => void {
-  activeListeners.add(onUpdate);
+  let isActive = true;
 
-  // 1. Wipe old legacy local data first and load the fresh 5-student dataset in Local Storage
+  // Load the last valid snapshot immediately while Firestore connects.
   initializeFreshStudentsStorage().then((freshLocalStudents) => {
-    if (activeListeners.has(onUpdate)) {
-      onUpdate(freshLocalStudents);
+    if (isActive) {
+      onUpdate(freshLocalStudents, 'cache');
     }
   });
 
-  // 2. Attempt to seed the 5 initial students into Cloud Firestore
+  // Seed deterministically before relying on the realtime snapshot.
   seedInitialStudentsToFirestore();
 
   const q = query(collection(firestoreDb, STUDENTS_COLLECTION), orderBy('createdAt', 'desc'));
@@ -126,10 +121,10 @@ export function subscribeToStudents(
   const unsubscribe = onSnapshot(
     q,
     async (snapshot) => {
+      if (!isActive) return;
       if (snapshot.empty) {
-        await seedInitialStudentsToFirestore();
         const localStudents = await getStudentsData();
-        onUpdate(localStudents);
+        if (isActive) onUpdate(localStudents, 'cache');
         return;
       }
 
@@ -144,20 +139,22 @@ export function subscribeToStudents(
       });
 
       await saveStudentsData(firestoreStudents);
-      onUpdate(firestoreStudents);
+      if (isActive) onUpdate(firestoreStudents, 'remote');
     },
     async (error) => {
       const cachedStudents = await getStudentsData();
-      onUpdate(cachedStudents);
-
-      if (!isPermissionDeniedError(error)) {
-        onError?.((error as Error)?.message || 'Gagal memuat data mahasiswa.');
-      }
+      if (!isActive) return;
+      onUpdate(cachedStudents, 'cache');
+      onError?.(
+        isPermissionDeniedError(error)
+          ? 'Akses Firestore ditolak. Periksa Firebase Security Rules untuk koleksi students.'
+          : (error as Error)?.message || 'Gagal memuat data mahasiswa.'
+      );
     }
   );
 
   return () => {
-    activeListeners.delete(onUpdate);
+    isActive = false;
     unsubscribe();
   };
 }
@@ -186,32 +183,17 @@ export async function addStudentToDatabase(input: StudentInput): Promise<Student
       createdAt: serverTimestamp(),
     });
 
-    const newStudent: Student = {
+    return {
       id: docRef.id,
       nama: cleanNama,
       nim: cleanNim,
       programStudi: cleanProdi,
     };
-
-    const existing = await getStudentsData();
-    const alreadyInList = existing.some((s) => s.id === newStudent.id);
-    if (!alreadyInList) {
-      await notifyAndPersistStudents([newStudent, ...existing]);
-    }
-
-    return newStudent;
   } catch (error) {
     if (isPermissionDeniedError(error)) {
-      const fallbackStudent: Student = {
-        id: `local-${Date.now()}`,
-        nama: cleanNama,
-        nim: cleanNim,
-        programStudi: cleanProdi,
-      };
-      const existing = await getStudentsData();
-      const updated = [fallbackStudent, ...existing];
-      await notifyAndPersistStudents(updated);
-      return fallbackStudent;
+      throw new Error(
+        'Mahasiswa tidak tersimpan karena akses Firestore ditolak. Periksa Firebase Security Rules.'
+      );
     }
 
     throw new Error((error as Error)?.message || 'Gagal menyimpan data mahasiswa.');
@@ -225,19 +207,13 @@ export async function addStudentToDatabase(input: StudentInput): Promise<Student
  * @param studentId - Document ID to delete
  */
 export async function deleteStudentFromDatabase(studentId: string): Promise<void> {
-  const existing = await getStudentsData();
-  const updated = existing.filter((item) => item.id !== studentId);
-  await notifyAndPersistStudents(updated);
-
-  if (studentId.startsWith('local-')) {
-    return;
-  }
-
   try {
     await deleteDoc(doc(firestoreDb, STUDENTS_COLLECTION, studentId));
   } catch (error) {
-    if (!isPermissionDeniedError(error)) {
-      throw new Error((error as Error)?.message || 'Gagal menghapus data mahasiswa.');
-    }
+    throw new Error(
+      isPermissionDeniedError(error)
+        ? 'Mahasiswa tidak dihapus karena akses Firestore ditolak. Periksa Firebase Security Rules.'
+        : (error as Error)?.message || 'Gagal menghapus data mahasiswa.'
+    );
   }
 }

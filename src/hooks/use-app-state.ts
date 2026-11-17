@@ -32,15 +32,21 @@ export function useAppState(callbacks?: UseAppStateCallbacks): AppStateStatus {
     (AppState.currentState as AppStateStatus | undefined) ?? 'active'
   );
   const callbacksRef = useRef(callbacks);
-  callbacksRef.current = callbacks;
+  const previousStateRef = useRef(appState);
+
+  useEffect(() => {
+    callbacksRef.current = callbacks;
+  }, [callbacks]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      const previousState = previousStateRef.current;
+      previousStateRef.current = nextAppState;
       setAppState(nextAppState);
 
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
+      if (previousState === 'active' && nextAppState !== 'active') {
         callbacksRef.current?.onBackground?.();
-      } else if (nextAppState === 'active') {
+      } else if (previousState !== 'active' && nextAppState === 'active') {
         callbacksRef.current?.onForeground?.();
       }
     });
