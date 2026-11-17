@@ -5,7 +5,7 @@
  * a compact, smaller-dimension footer containing only the Dashboard tab when on the Dashboard.
  */
 import { Image } from 'expo-image';
-import { Slot } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -19,14 +19,25 @@ import { useAuth } from '@/hooks/auth-context';
  * Dashboard-only footer bar when the user is logged in.
  */
 export default function AppTabs() {
-  const { isLoggedIn } = useAuth();
+  const { isLoggedIn, session } = useAuth();
+  const isSuperAdmin = session?.role === 'super_admin';
   const insets = useSafeAreaInsets();
   const colors = Colors.light;
 
   return (
     <View style={styles.root}>
       <View style={styles.content}>
-        <Slot />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Protected guard={!isLoggedIn}>
+            <Stack.Screen name="login" />
+          </Stack.Protected>
+          <Stack.Protected guard={isLoggedIn && !isSuperAdmin}>
+            <Stack.Screen name="index" />
+          </Stack.Protected>
+          <Stack.Protected guard={isLoggedIn && isSuperAdmin}>
+            <Stack.Screen name="admin" />
+          </Stack.Protected>
+        </Stack>
       </View>
 
       {/* Hide footer completely on the Login page; render compact footer only on Dashboard */}
@@ -48,7 +59,7 @@ export default function AppTabs() {
               tintColor="#2563EB"
             />
             <ThemedText type="smallBold" style={styles.tabLabel}>
-              Dashboard
+              {isSuperAdmin ? 'Dashboard Super Admin' : 'Dashboard Mahasiswa'}
             </ThemedText>
           </View>
         </View>

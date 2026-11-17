@@ -11,7 +11,7 @@ import { LogBox } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
-import { AuthProvider } from '@/hooks/auth-context';
+import { AuthProvider, useAuth } from '@/hooks/auth-context';
 
 // Suppress stale Firestore permission warnings in React Native LogBox overlay
 LogBox.ignoreLogs([
@@ -26,13 +26,24 @@ SplashScreen.preventAutoHideAsync();
 /**
  * Root TabLayout component that wraps the application with Light theme and AuthProvider contexts.
  */
-export default function TabLayout() {
+function AppShell() {
+  const { isHydrating } = useAuth();
+  if (isHydrating) return null;
+
+  return (
+    <>
+      <StatusBar style="dark" />
+      <AnimatedSplashOverlay />
+      <AppTabs />
+    </>
+  );
+}
+
+export default function RootLayout() {
   return (
     <ThemeProvider value={DefaultTheme}>
       <AuthProvider>
-        <StatusBar style="dark" />
-        <AnimatedSplashOverlay />
-        <AppTabs />
+        <AppShell />
       </AuthProvider>
     </ThemeProvider>
   );

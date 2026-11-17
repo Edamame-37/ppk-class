@@ -25,6 +25,8 @@ export const STORAGE_KEYS = {
 /**
  * Represents a persisted Firebase user authentication session stored in Local Storage.
  */
+export type UserRole = 'super_admin' | 'user';
+
 export interface UserSession {
   /** Firebase Auth UID */
   uid: string;
@@ -32,10 +34,12 @@ export interface UserSession {
   email: string;
   /** Optional display name from Google Sign-In or profile */
   displayName?: string;
-  /** Active Firebase ID token (JWT) */
-  token: string;
   /** Authentication provider method (`'email'` | `'google'`) */
   loginMethod: 'email' | 'google';
+  /** Providers linked to the same Firebase UID. */
+  providers: string[];
+  /** Cached display role derived from the verified Firebase email. */
+  role: UserRole;
   /** Whether the user checked Remember Me */
   rememberMe: boolean;
   /** ISO timestamp when the session was saved */
@@ -80,18 +84,35 @@ export async function getUserSession(): Promise<UserSession | null> {
   try {
     const cached = memoryCache.get(STORAGE_KEYS.AUTH_SESSION);
     if (cached) {
-      return JSON.parse(cached) as UserSession;
+      return parseUserSession(cached);
     }
     const raw = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
     if (raw) {
       memoryCache.set(STORAGE_KEYS.AUTH_SESSION, raw);
-      return JSON.parse(raw) as UserSession;
+      return parseUserSession(raw);
     }
     return null;
   } catch (error) {
     console.error('Failed to read user session:', error);
     return null;
   }
+}
+
+function parseUserSession(raw: string): UserSession | null {
+  const value = JSON.parse(raw) as Partial<UserSession>;
+  if (
+    typeof value.uid !== 'string' ||
+    typeof value.email !== 'string' ||
+    (value.loginMethod !== 'email' && value.loginMethod !== 'google') ||
+    !Array.isArray(value.providers) ||
+    !value.providers.every((provider) => typeof provider === 'string') ||
+    (value.role !== 'super_admin' && value.role !== 'user') ||
+    typeof value.rememberMe !== 'boolean' ||
+    typeof value.loggedInAt !== 'string'
+  ) {
+    return null;
+  }
+  return value as UserSession;
 }
 
 /**
@@ -165,7 +186,7 @@ export async function getStudentsData(): Promise<Student[]> {
       memoryCache.set(STORAGE_KEYS.STUDENTS_LIST, raw);
       const parsed = JSON.parse(raw) as Student[];
       if (Array.isArray(parsed)) {
-        return parsed;
+        return parsed.filter(isStudent);
       }
     }
     const seed = [...INITIAL_STUDENTS_SEED];
@@ -175,6 +196,17 @@ export async function getStudentsData(): Promise<Student[]> {
     console.error('Failed to read students cache:', error);
     return [...INITIAL_STUDENTS_SEED];
   }
+}
+
+function isStudent(value: unknown): value is Student {
+  if (!value || typeof value !== 'object') return false;
+  const student = value as Partial<Student>;
+  return (
+    typeof student.id === 'string' &&
+    typeof student.nama === 'string' &&
+    typeof student.nim === 'string' &&
+    typeof student.programStudi === 'string'
+  );
 }
 
 /**

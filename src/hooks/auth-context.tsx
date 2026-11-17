@@ -5,17 +5,28 @@
  */
 
 import {
+  browserLocalPersistence,
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
+  linkWithCredential,
+  sendPasswordResetEmail,
+  setPersistence,
   signInWithEmailAndPassword,
   signOut,
+  type Persistence,
   User,
+  UserCredential,
 } from 'firebase/auth';
 import { createContext, PropsWithChildren, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 
 import { firebaseAuth } from '@/config/firebase';
 import { signInWithGoogle } from '@/services/google-auth';
+import { isSuperAdminEmail, syncAndReadUserRole } from '@/services/role-service';
 import {
   clearUserSession,
+  getUserSession,
   saveUserSession,
   UserSession,
 } from '@/utils/storage';
@@ -32,7 +43,7 @@ async function persistFirebaseUser(
   rememberMe: boolean = true,
   methodOverride?: 'email' | 'google'
 ): Promise<UserSession> {
-  const token = await fbUser.getIdToken();
+  const role = await syncAndReadUserRole(fbUser);
   const isGoogle =
     methodOverride === 'google' ||
     fbUser.providerData.some((p) => p?.providerId === 'google.com');
@@ -41,8 +52,11 @@ async function persistFirebaseUser(
     uid: fbUser.uid,
     email: fbUser.email ?? '',
     displayName: fbUser.displayName ?? undefined,
-    token,
     loginMethod: isGoogle ? 'google' : 'email',
+    providers: fbUser.providerData
+      .map((provider) => provider.providerId)
+      .filter(Boolean),
+    role,
     rememberMe,
     loggedInAt: new Date().toISOString(),
   };
@@ -64,7 +78,11 @@ export function formatFirebaseAuthError(error: unknown): string {
     case 'auth/wrong-password':
       return 'Email atau kata sandi salah (atau akun belum terdaftar). Silakan klik "Daftar Sekarang" jika belum memiliki akun.';
     case 'auth/email-already-in-use':
-      return 'Email ini sudah terdaftar. Silakan masuk menggunakan kata sandi Anda.';
+      return 'Email ini sudah terdaftar. Verifikasi dengan Google untuk menghubungkan kata sandi ke akun yang sama.';
+    case 'auth/provider-already-linked':
+      return 'Akun ini sudah memiliki metode Email/Password. Silakan gunakan mode Masuk.';
+    case 'auth/credential-already-in-use':
+      return 'Credential tersebut sudah terhubung ke akun Firebase lain.';
     case 'auth/weak-password':
       return 'Kata sandi terlalu lemah (minimal 6 karakter).';
     case 'auth/operation-not-allowed':
@@ -104,8 +122,10 @@ export interface AuthContextValue {
   }) => Promise<boolean>;
   /** Signs out of Firebase Auth, clears the active token from Local Storage, and returns to Login */
   logout: () => Promise<void>;
-  /** Direct setter for login state */
-  setIsLoggedIn: (value: boolean) => void;
+  /** Sends a Firebase password-reset email. */
+  resetPassword: (email: string) => Promise<void>;
+  /** Links an Email/Password credential to the active verified Super Admin account. */
+  linkAdminPassword: (password: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -116,8 +136,23 @@ const AuthContext = createContext<AuthContextValue>({
   registerWithEmail: async () => {},
   loginWithGoogle: async () => false,
   logout: async () => {},
-  setIsLoggedIn: () => {},
+  resetPassword: async () => {},
+  linkAdminPassword: async () => {},
 });
+
+export function canConfigureAdminPassword(
+  user: Pick<User, 'email' | 'emailVerified'> | null
+): boolean {
+  return isSuperAdminEmail(user?.email);
+}
+
+export function getWebPersistence(
+  rememberMe: boolean,
+  platform: typeof Platform.OS = Platform.OS
+): Persistence | null {
+  if (platform !== 'web') return null;
+  return rememberMe ? browserLocalPersistence : browserSessionPersistence;
+}
 
 /**
  * Provides real Firebase Authentication while ensuring every app launch starts on the Login screen.
@@ -125,7 +160,7 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: PropsWithChildren) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [session, setSession] = useState<UserSession | null>(null);
-  const [isHydrating] = useState(false);
+  const [isHydrating, setIsHydrating] = useState(true);
 
   /**
    * Mounting lifecycle:
@@ -133,9 +168,50 @@ export function AuthProvider({ children }: PropsWithChildren) {
    * is always presented with the Login screen first before entering the Dashboard.
    */
   useEffect(() => {
-    clearUserSession();
-    signOut(firebaseAuth).catch(() => {});
+    let active = true;
+    async function restoreSession() {
+      await firebaseAuth.authStateReady();
+      const firebaseUser = firebaseAuth.currentUser;
+      const savedSession = await getUserSession();
+      if (!active) return;
+
+      if (firebaseUser && savedSession?.rememberMe) {
+        const restoredSession = await persistFirebaseUser(
+          firebaseUser,
+          true,
+          savedSession.loginMethod
+        );
+        if (!active) return;
+        setSession(restoredSession);
+        setIsLoggedIn(true);
+      } else {
+        if (firebaseUser) await signOut(firebaseAuth);
+        await clearUserSession();
+        if (!active) return;
+        setSession(null);
+        setIsLoggedIn(false);
+      }
+      setIsHydrating(false);
+    }
+
+    restoreSession().catch(async () => {
+      await clearUserSession();
+      if (active) {
+        setSession(null);
+        setIsLoggedIn(false);
+        setIsHydrating(false);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
+
+  const configureWebPersistence = async (rememberMe: boolean) => {
+    const persistence = getWebPersistence(rememberMe);
+    if (persistence) await setPersistence(firebaseAuth, persistence);
+  };
 
   /**
    * Authenticates an existing user with Email & Password via Firebase Auth (`signInWithEmailAndPassword`).
@@ -157,6 +233,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error('Silakan masukkan kata sandi Anda.');
     }
 
+    await configureWebPersistence(rememberMe);
     const cred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, password);
     const newSession = await persistFirebaseUser(cred.user, rememberMe, 'email');
     setSession(newSession);
@@ -184,7 +261,31 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error('Kata sandi wajib diisi minimal 6 karakter.');
     }
 
-    const cred = await createUserWithEmailAndPassword(firebaseAuth, cleanEmail, password);
+    await configureWebPersistence(rememberMe);
+    let cred: UserCredential;
+    try {
+      cred = await createUserWithEmailAndPassword(firebaseAuth, cleanEmail, password);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'auth/email-already-in-use') {
+        throw error;
+      }
+
+      const googleResult = await signInWithGoogle();
+      if (!googleResult) {
+        throw new Error('Verifikasi Google dibatalkan. Akun belum dihubungkan.');
+      }
+      if (googleResult.user.email?.toLowerCase() !== cleanEmail.toLowerCase()) {
+        await signOut(firebaseAuth);
+        throw new Error(
+          'Akun Google yang dipilih berbeda dari email formulir. Pilih akun Google dengan email yang sama.'
+        );
+      }
+
+      cred = await linkWithCredential(
+        googleResult.user,
+        EmailAuthProvider.credential(cleanEmail, password)
+      );
+    }
     const newSession = await persistFirebaseUser(cred.user, rememberMe, 'email');
     setSession(newSession);
     setIsLoggedIn(true);
@@ -196,6 +297,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const loginWithGoogle = async (params?: {
     rememberMe?: boolean;
   }): Promise<boolean> => {
+    const rememberMe = params?.rememberMe ?? true;
+    await configureWebPersistence(rememberMe);
     const result = await signInWithGoogle();
     if (!result) {
       return false;
@@ -203,7 +306,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const newSession = await persistFirebaseUser(
       result.user,
-      params?.rememberMe ?? true,
+      rememberMe,
       'google'
     );
     setSession(newSession);
@@ -225,6 +328,36 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setIsLoggedIn(false);
   };
 
+  const resetPassword = async (email: string) => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) throw new Error('Masukkan alamat email terlebih dahulu.');
+    await sendPasswordResetEmail(firebaseAuth, cleanEmail);
+  };
+
+  const linkAdminPassword = async (password: string) => {
+    const user = firebaseAuth.currentUser;
+    if (!user || !canConfigureAdminPassword(user)) {
+      throw new Error('Setup password hanya tersedia untuk akun Super Admin terverifikasi.');
+    }
+    if (password.length < 6) {
+      throw new Error('Kata sandi wajib minimal 6 karakter.');
+    }
+    if (user.providerData.some((provider) => provider.providerId === 'password')) {
+      throw new Error('Login Email & Password sudah aktif untuk akun ini.');
+    }
+
+    const result = await linkWithCredential(
+      user,
+      EmailAuthProvider.credential(user.email!, password)
+    );
+    const updatedSession = await persistFirebaseUser(
+      result.user,
+      session?.rememberMe ?? true,
+      session?.loginMethod ?? 'google'
+    );
+    setSession(updatedSession);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -235,7 +368,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         registerWithEmail,
         loginWithGoogle,
         logout,
-        setIsLoggedIn,
+        resetPassword,
+        linkAdminPassword,
       }}>
       {children}
     </AuthContext.Provider>

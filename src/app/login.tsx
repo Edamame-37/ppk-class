@@ -27,20 +27,12 @@ import { useTheme } from '@/hooks/use-theme';
 import { getLoginDraft, saveLoginDraft } from '@/utils/storage';
 
 /**
- * Props for the LoginScreen component.
- */
-export interface LoginScreenProps {
-  /** Optional callback triggered when the user completes login to transition to the Dashboard */
-  onLoginSuccess?: () => void;
-}
-
-/**
  * LoginScreen component providing real Email/Password Login, Account Registration,
  * and Google Sign-In via Firebase Authentication.
  */
-export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
+export default function LoginScreen() {
   const theme = useTheme();
-  const { loginWithEmail, registerWithEmail, loginWithGoogle } = useAuth();
+  const { loginWithEmail, registerWithEmail, loginWithGoogle, resetPassword } = useAuth();
 
   // Form state for manual login/registration
   const [email, setEmail] = useState('');
@@ -105,11 +97,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         await loginWithEmail({ email, password, rememberMe });
       }
 
-      if (onLoginSuccess) {
-        onLoginSuccess();
-      } else {
-        router.replace('/');
-      }
+      router.replace('/');
     } catch (err) {
       setErrorMessage(formatFirebaseAuthError(err));
     } finally {
@@ -130,11 +118,20 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         return;
       }
 
-      if (onLoginSuccess) {
-        onLoginSuccess();
-      } else {
-        router.replace('/');
-      }
+      router.replace('/');
+    } catch (err) {
+      setErrorMessage(formatFirebaseAuthError(err));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    try {
+      await resetPassword(email);
+      setErrorMessage('Tautan reset kata sandi telah dikirim. Periksa email Anda.');
     } catch (err) {
       setErrorMessage(formatFirebaseAuthError(err));
     } finally {
@@ -262,7 +259,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   </ThemedText>
                 </Pressable>
 
-                <Pressable>
+                <Pressable onPress={handleForgotPassword} disabled={isSubmitting}>
                   <ThemedText type="small" style={styles.linkText}>
                     Lupa kata sandi?
                   </ThemedText>
